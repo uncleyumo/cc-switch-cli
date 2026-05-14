@@ -1,0 +1,4 @@
+.claude
+*.exe
+**/cc-switch-cli
+.idea
