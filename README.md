@@ -26,11 +26,50 @@ cc-switch-cli init
 # 3. List available providers
 cc-switch-cli list
 
-# 4. Switch to a provider
-cc-switch-cli model set xiaomi-mimo
+# 4. View a provider's config
+cc-switch-cli cat deepseek
 
-# 5. Check current provider
+# 5. Switch to a provider
+cc-switch-cli model set deepseek
+
+# 6. Check current provider
 cc-switch-cli model current
+
+# 7. Create a local settings file for a project
+cc-switch-cli local deepseek .
+```
+
+## Viewing Provider Config
+
+Use `cat` to quickly inspect a provider's configuration without navigating to the models directory:
+
+```bash
+# Print deepseek provider config
+cc-switch-cli cat deepseek
+
+# Print mimo provider config
+cc-switch-cli cat mimo
+```
+
+## Creating Local Project Settings
+
+Use `local` to create a `settings.local.json` file for project-level Claude Code configuration:
+
+```bash
+# Create settings.local.json in current directory
+cc-switch-cli local deepseek .
+
+# Create in a specific directory
+cc-switch-cli local deepseek ./.claude/
+
+# Create with a custom filename
+cc-switch-cli local deepseek ./.claude/settings.json.bk
+
+# Default: creates settings.local.json in current directory
+cc-switch-cli local deepseek
+
+# Overwrite existing file
+cc-switch-cli local deepseek . --force
 ```
 
 ## Commands
@@ -39,6 +78,8 @@ cc-switch-cli model current
 |---------|-------------|
 | `cc-switch-cli init` | First-time setup: creates config directory and files |
 | `cc-switch-cli list` | List available model providers |
+| `cc-switch-cli cat <provider>` | Print provider configuration content |
+| `cc-switch-cli local <provider> [path]` | Create a local settings file from provider config |
 | `cc-switch-cli model set <provider>` | Switch to a model provider |
 | `cc-switch-cli model current` | Show active model provider |
 | `cc-switch-cli model backup` | Create manual backup of current settings |

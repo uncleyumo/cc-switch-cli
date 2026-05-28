@@ -148,6 +148,70 @@ func updateCurrentMarker(provider string) error {
 	return os.WriteFile(markerPath, []byte(provider), 0666)
 }
 
+func GetProviderConfig(provider string) (string, error) {
+	providerFile := filepath.Join(config.ModelsDir(), provider+".json")
+	data, err := os.ReadFile(providerFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("provider %q not found in models/ directory", provider)
+		}
+		return "", fmt.Errorf("failed to read provider config: %w", err)
+	}
+	return string(data), nil
+}
+
+func CreateLocalConfig(provider string, path string, force bool) error {
+	providerFile := filepath.Join(config.ModelsDir(), provider+".json")
+	data, err := os.ReadFile(providerFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("provider %q not found in models/ directory", provider)
+		}
+		return fmt.Errorf("failed to read provider config: %w", err)
+	}
+
+	var targetDir, targetFile string
+	if path == "" {
+		targetDir, _ = os.Getwd()
+		targetFile = "settings.local.json"
+	} else {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("invalid path: %w", err)
+		}
+		if isFilePath(absPath) {
+			targetDir = filepath.Dir(absPath)
+			targetFile = filepath.Base(absPath)
+		} else {
+			targetDir = absPath
+			targetFile = "settings.local.json"
+		}
+	}
+
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	targetPath := filepath.Join(targetDir, targetFile)
+	if !force {
+		if _, err := os.Stat(targetPath); err == nil {
+			return fmt.Errorf("file %s already exists, use --force to overwrite", targetPath)
+		}
+	}
+
+	if err := os.WriteFile(targetPath, data, 0666); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	fmt.Printf("Created %s with %s provider config\n", targetPath, provider)
+	return nil
+}
+
+func isFilePath(path string) bool {
+	ext := filepath.Ext(path)
+	return ext != ""
+}
+
 func timestamp() string {
 	return time.Now().Format("20060102-150405")
 }
