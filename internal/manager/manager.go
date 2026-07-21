@@ -1,6 +1,10 @@
+// Package manager is the orchestration layer between commands and disk. It
+// wraps model IO, atomic file replacement of the target settings, current-
+// provider tracking and audit logging.
 package manager
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,208 +12,187 @@ import (
 	"time"
 
 	"cc-switch-cli/internal/config"
+	"cc-switch-cli/internal/fsutil"
 	"cc-switch-cli/internal/logger"
+	"cc-switch-cli/internal/model"
 )
 
-func ListProviders() ([]string, error) {
-	modelsDir := config.ModelsDir()
-
-	entries, err := os.ReadDir(modelsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("models directory not found at %s — run `cc-switch-cli init`", modelsDir)
-		}
-		return nil, fmt.Errorf("failed to read models directory: %w", err)
-	}
-
-	var providers []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if strings.HasSuffix(name, ".json") {
-			providers = append(providers, strings.TrimSuffix(name, ".json"))
-		}
-	}
-
-	return providers, nil
+// ListModels returns every provider name known to the store.
+func ListModels() ([]string, error) {
+	return model.List()
 }
 
-func SwitchProvider(provider string) error {
+// SwitchProvider replaces the target settings file with a byte-copy of the
+// provider file, updates the current marker and appends to the audit log.
+// Byte-copy is intentional: it keeps the global switch hot-path lossless and
+// independent of the Model parser.
+func SwitchProvider(name string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-
-	providerFile := filepath.Join(config.ModelsDir(), provider+".json")
-	if _, err := os.Stat(providerFile); os.IsNotExist(err) {
-		return fmt.Errorf("provider %q not found in models/ directory", provider)
+	data, err := model.ReadRaw(name)
+	if err != nil {
+		return err
 	}
-
 	if err := ensureFirstTimeBackup(cfg.Target.Path); err != nil {
 		return err
 	}
-
-	os.Remove(cfg.Target.Path)
-
-	data, err := os.ReadFile(providerFile)
-	if err != nil {
-		return fmt.Errorf("failed to read provider config: %w", err)
+	if err := os.MkdirAll(filepath.Dir(cfg.Target.Path), 0o755); err != nil {
+		return fmt.Errorf("failed to create target directory: %w", err)
 	}
-
-	if err := os.WriteFile(cfg.Target.Path, data, 0666); err != nil {
-		return fmt.Errorf("failed to write settings: %w", err)
+	if err := fsutil.AtomicWrite(cfg.Target.Path, data, 0o644); err != nil {
+		return fmt.Errorf("failed to update target settings: %w", err)
 	}
-
-	if err := updateCurrentMarker(provider); err != nil {
-		return err
+	if err := updateCurrentMarker(name); err != nil {
+		return fmt.Errorf("target updated but failed to record current provider: %w", err)
 	}
-
-	if err := logger.LogSwitch(provider); err != nil {
+	if err := logger.LogSwitch(name); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to write log: %v\n", err)
 	}
-
 	return nil
 }
 
+// GetCurrentProvider returns the name of the active provider, or "" if none is
+// recorded yet.
 func GetCurrentProvider() (string, error) {
-	matches, err := filepath.Glob(filepath.Join(config.ConfigDir(), "*.current"))
+	dir, err := config.ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "*.current"))
 	if err != nil {
 		return "", fmt.Errorf("failed to search for current marker: %w", err)
 	}
-
 	if len(matches) == 0 {
 		return "", nil
 	}
-
-	name := filepath.Base(matches[0])
-	name = strings.TrimSuffix(name, ".current")
-	return name, nil
+	base := filepath.Base(matches[0])
+	return strings.TrimSuffix(base, ".current"), nil
 }
 
+// BackupSettings copies the current target settings to
+// ~/.cc-switch-cli/backup-YYYYMMDD-HHMMSS.json and returns its path.
 func BackupSettings() (string, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return "", err
 	}
-
 	data, err := os.ReadFile(cfg.Target.Path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("no settings file at %s to back up", cfg.Target.Path)
+		}
 		return "", fmt.Errorf("failed to read current settings: %w", err)
 	}
-
-	backupName := fmt.Sprintf("backup-%s.json", timestamp())
-	backupPath := filepath.Join(config.ConfigDir(), backupName)
-
-	if err := os.WriteFile(backupPath, data, 0666); err != nil {
+	dir, err := config.ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	backupPath := filepath.Join(dir, fmt.Sprintf("backup-%s.json", timestamp()))
+	if err := fsutil.AtomicWrite(backupPath, data, 0o644); err != nil {
 		return "", fmt.Errorf("failed to write backup: %w", err)
 	}
-
 	return backupPath, nil
 }
 
+// ensureFirstTimeBackup snapshots the pre-first-switch settings to
+// default.json (and a timestamped twin) so users can always recover.
 func ensureFirstTimeBackup(targetPath string) error {
-	defaultPath := filepath.Join(config.ConfigDir(), "default.json")
+	dir, err := config.ConfigDir()
+	if err != nil {
+		return err
+	}
+	defaultPath := filepath.Join(dir, "default.json")
 	if _, err := os.Stat(defaultPath); err == nil {
 		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to stat default backup: %w", err)
 	}
 
 	data, err := os.ReadFile(targetPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Println("Warning: no existing settings.json to back up")
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintln(os.Stderr, "note: no existing settings.json to back up")
 			return nil
 		}
 		return fmt.Errorf("failed to read current settings for backup: %w", err)
 	}
-
-	if err := os.WriteFile(defaultPath, data, 0666); err != nil {
+	if err := fsutil.AtomicWrite(defaultPath, data, 0o644); err != nil {
 		return fmt.Errorf("failed to create default backup: %w", err)
 	}
-
-	tsName := fmt.Sprintf("default-%s.json", timestamp())
-	tsPath := filepath.Join(config.ConfigDir(), tsName)
-	if err := os.WriteFile(tsPath, data, 0666); err != nil {
+	tsPath := filepath.Join(dir, fmt.Sprintf("default-%s.json", timestamp()))
+	if err := fsutil.AtomicWrite(tsPath, data, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to create timestamped backup: %v\n", err)
 	}
-
-	fmt.Println("Backed up original settings as default.json")
+	fmt.Fprintln(os.Stderr, "note: backed up original settings as default.json")
 	return nil
 }
 
+// updateCurrentMarker enforces the "at most one *.current file" invariant.
 func updateCurrentMarker(provider string) error {
-	matches, _ := filepath.Glob(filepath.Join(config.ConfigDir(), "*.current"))
+	dir, err := config.ConfigDir()
+	if err != nil {
+		return err
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "*.current"))
 	for _, m := range matches {
-		os.Remove(m)
+		_ = os.Remove(m)
 	}
-
-	markerPath := filepath.Join(config.ConfigDir(), provider+".current")
-	return os.WriteFile(markerPath, []byte(provider), 0666)
-}
-
-func GetProviderConfig(provider string) (string, error) {
-	providerFile := filepath.Join(config.ModelsDir(), provider+".json")
-	data, err := os.ReadFile(providerFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("provider %q not found in models/ directory", provider)
-		}
-		return "", fmt.Errorf("failed to read provider config: %w", err)
+	markerPath := filepath.Join(dir, provider+".current")
+	if err := os.WriteFile(markerPath, []byte(provider), 0o644); err != nil {
+		return fmt.Errorf("failed to write current marker: %w", err)
 	}
-	return string(data), nil
-}
-
-func CreateLocalConfig(provider string, path string, force bool) error {
-	providerFile := filepath.Join(config.ModelsDir(), provider+".json")
-	data, err := os.ReadFile(providerFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("provider %q not found in models/ directory", provider)
-		}
-		return fmt.Errorf("failed to read provider config: %w", err)
-	}
-
-	var targetDir, targetFile string
-	if path == "" {
-		targetDir, _ = os.Getwd()
-		targetFile = "settings.local.json"
-	} else {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path: %w", err)
-		}
-		if isFilePath(absPath) {
-			targetDir = filepath.Dir(absPath)
-			targetFile = filepath.Base(absPath)
-		} else {
-			targetDir = absPath
-			targetFile = "settings.local.json"
-		}
-	}
-
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	targetPath := filepath.Join(targetDir, targetFile)
-	if !force {
-		if _, err := os.Stat(targetPath); err == nil {
-			return fmt.Errorf("file %s already exists, use --force to overwrite", targetPath)
-		}
-	}
-
-	if err := os.WriteFile(targetPath, data, 0666); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
-	}
-
-	fmt.Printf("Created %s with %s provider config\n", targetPath, provider)
 	return nil
 }
 
-func isFilePath(path string) bool {
-	ext := filepath.Ext(path)
-	return ext != ""
+// GetProviderRaw returns the raw bytes of a provider file.
+func GetProviderRaw(name string) ([]byte, error) {
+	return model.ReadRaw(name)
+}
+
+// clearCurrentIf clears the current marker if it points at the given name.
+// Used by delete/rename to keep state consistent.
+func clearCurrentIf(name string) error {
+	current, err := GetCurrentProvider()
+	if err != nil {
+		return err
+	}
+	if current != name {
+		return nil
+	}
+	dir, err := config.ConfigDir()
+	if err != nil {
+		return err
+	}
+	return os.Remove(filepath.Join(dir, name+".current"))
+}
+
+// DeleteProvider removes a provider file and clears the current marker if it
+// pointed at that provider.
+func DeleteProvider(name string) error {
+	if err := clearCurrentIf(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return model.Remove(name)
+}
+
+// RenameProvider renames a provider file and updates the current marker if it
+// pointed at the old name.
+func RenameProvider(oldName, newName string) error {
+	current, err := GetCurrentProvider()
+	if err != nil {
+		return err
+	}
+	if err := model.Rename(oldName, newName); err != nil {
+		return err
+	}
+	if current == oldName {
+		if err := updateCurrentMarker(newName); err != nil {
+			return fmt.Errorf("renamed but failed to update current marker: %w", err)
+		}
+	}
+	return nil
 }
 
 func timestamp() string {
