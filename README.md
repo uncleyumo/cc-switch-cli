@@ -1,247 +1,156 @@
 # cc-switch-cli
 
-Manage a library of Claude Code model provider configs and swap them into
-`~/.claude/settings.json` on demand. Ships as a single Go binary with a short
-alias `ccs`.
+A library of Claude Code provider configs, swapped into `~/.claude/settings.json`
+with one command. Single Go binary, short alias **`ccs`**.
 
-- **Fast switches** — one command replaces the active provider atomically.
-- **Project-scoped configs** — `ccs local <model>` writes to
-  `.claude/settings.local.json` in the current project without touching
-  anything else in it (permissions, hooks, MCP config are preserved).
-- **Interactive TUI** — bare `ccs model` opens a Bubble Tea manager to
-  add / edit / test / delete models from one screen.
-- **Provider availability check** — `ccs model test` streams a real Anthropic
-  Messages request against each provider (streaming + tool call).
+```bash
+ccs use packy-bridge   # swap the global provider (atomic, auto-backup)
+ccs current            # → packy-bridge
+```
 
 Requires Go 1.24.5+ to build.
 
----
-
 ## Install
 
-```powershell
-git clone <this repo>
-cd cc-switch-cli
-build.bat        # produces cc-switch-cli.exe and ccs.exe
-```
-
-Non-Windows builds:
-
 ```bash
+git clone <repo> && cd cc-switch-cli
+build.bat              # Windows: cc-switch-cli.exe + ccs.exe
+# or, any OS:
 go build -ldflags="-s -w" -o ccs .
 ```
 
-Add the binary to `PATH`. First-time setup:
+Put the binary on `PATH`, then:
 
 ```bash
-ccs init
+ccs init               # create ~/.cc-switch-cli/ + config.toml
 ```
 
-This creates `~/.cc-switch-cli/`, the `models/` subdirectory and a default
-`config.toml` pointing at `~/.claude/settings.json`.
-
-Drop provider JSON files into `~/.cc-switch-cli/models/`. Each file is a
-complete Claude Code `settings.json`. Example:
+Each file in `~/.cc-switch-cli/models/` is one complete Claude Code `settings.json`:
 
 ```json
 {
   "env": {
     "ANTHROPIC_AUTH_TOKEN": "your-api-key",
     "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
-    "ANTHROPIC_MODEL": "claude-sonnet-4-6",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5-20251001",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-7",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-6"
+    "ANTHROPIC_MODEL": "claude-sonnet-4-6"
   },
   "model": "sonnet"
 }
 ```
 
----
-
-## Command tree
+## Commands
 
 ```
-ccs
-├─ init                              create ~/.cc-switch-cli and config.toml
-├─ use [model]                       activate globally; no arg → TUI picker
-├─ current                           print the active model
-├─ local [model]                     write .claude/settings.local.json (merge)
-│    --overwrite                     replace the file wholesale
-│    --path <dir|file>               target another directory or explicit file
-├─ backup                            snapshot the current settings.json
-├─ model, m                          interactive TUI (no subcommand)
-│    ├─ list, ls                     list models with active + last test status
-│    ├─ show <name> [--reveal]       print JSON; token masked unless --reveal
-│    ├─ add <name> [--from x] [--no-edit]
-│    ├─ edit [name]                  structured / raw JSON editor
-│    ├─ rename <old> <new>
-│    ├─ remove, rm <name> [-y]
-│    ├─ test [name...]               run Anthropic streaming + tool checks
-│    │   --stream / --tool           select one check
-│    │   --timeout 30s               per-provider timeout
-│    │   --concurrency 4             max models tested in parallel
-│    │   --auth auto|bearer|x-api-key
-│    ├─ doctor                       show resolved vs on-the-wire model id
-│    └─ tui                          explicit TUI (same as bare `model`)
+ccs (cc-switch-cli)
+├─ init                          create ~/.cc-switch-cli + config.toml
+├─ use [model]                   activate globally; no arg → TUI picker
+├─ current                       print the active model
+├─ local [model]                 write ./.claude/settings.local.json (deep-merge)
+│    --overwrite                 copy the provider file verbatim instead
+│    --path <dir|file>           target another dir / explicit file
+├─ backup                        snapshot the current settings.json
+├─ model, m                      manager TUI (no subcommand)
+│  ├─ list, ls                   list models + active flag + last test status
+│  ├─ show <name> [--reveal]     print JSON (token masked unless --reveal)
+│  ├─ add <name> [--from x] [--no-edit]
+│  ├─ edit [name]                structured / raw JSON editor
+│  ├─ rename <old> <new>
+│  ├─ remove, rm <name> [-y]
+│  ├─ test [name...]             streaming + tool checks (see below)
+│  │   --stream / --tool         run one check only
+│  │   --timeout 30s  --concurrency 4  --auth auto|bearer|x-api-key
+│  ├─ doctor                     show resolved vs on-the-wire model id (read-only)
+│  └─ tui                        explicit manager (same as bare `model`)
 └─ config, cfg
-     ├─ show                         resolved paths + current model
-     └─ set-target <path>            change target settings.json path
+   ├─ show                       resolved paths + current model
+   └─ set-target <path>          change the target settings.json
 ```
 
 `--version` / `-v` prints the build-stamped version.
 
----
-
-## Typical workflows
-
-Activate a provider globally:
+## Typical use
 
 ```bash
-ccs use packy-bridge     # or omit the arg in a terminal to open the picker
-ccs current              # → packy-bridge
+ccs model add my-proxy           # template + open the editor
+ccs model test                   # availability-check every provider
+ccs use my-proxy                 # activate globally
+cd my-project && ccs local my-proxy   # scope it to one project
+ccs model show my-proxy --reveal # full JSON with secrets
 ```
 
-Scope a provider to a project:
+## `ccs local` — merge by default
 
-```bash
-cd my-project
-ccs local packy-bridge   # merges into ./.claude/settings.local.json
-```
+`ccs local <name>` deep-merges into `./.claude/settings.local.json`: the
+provider's `env` keys and top-level `model` override same-name values, and
+**everything else is preserved** (permissions, hooks, MCP config, unknown keys).
 
-Adding a new provider:
+- `--overwrite` — copy the provider file verbatim (drops project-specific keys).
+- `--path <dir>` / `--path <file>` — write elsewhere than the current directory.
 
-```bash
-ccs model add my-proxy        # creates a template and opens the editor
-ccs model edit my-proxy       # come back later to tweak
-ccs model rename my-proxy new
-```
+## `ccs model test` — availability
 
-Sanity-check every provider you have:
+Runs real Anthropic Messages calls (streaming + a tool-call probe), so expect a
+small token cost. Results are cached in `~/.cc-switch-cli/test-status.json` and
+shown per model in `ccs model list`.
 
-```bash
-ccs model test               # tests all providers, streaming + tool
-ccs model test my-proxy --stream --timeout 20s
-```
+| Status | Meaning |
+|---|---|
+| **OK** | All requested checks passed — fully usable. |
+| **OK~** | Streaming works (usable for chat) but the tool probe didn't confirm `tool_use` this run — a caveat, not an outage. |
+| **FAIL** | Streaming failed (bad token / no balance / unknown model / unreachable) — not usable. |
 
-Results are cached in `~/.cc-switch-cli/test-status.json` and shown after each
-model name in `ccs model list`. Testing issues real Anthropic API calls
-against each provider — expect a small token cost.
+Streaming is the source of truth: a provider whose stream check passed is never
+FAIL, even if the tool probe errored transiently. The tool probe mirrors Claude
+Code — it sends the tool list but omits `tool_choice`, since forced directives
+like `"any"` are rejected by several gateways that relay tools fine.
 
-### Reading the results
+## The `[1m]` / `[200k]` context marker
 
-Each check reports one of three statuses, and `model list` collapses a
-provider's checks to a single verdict:
+A trailing marker like `claude-opus-4-8[1m]` is **not** corruption — it selects
+the larger context window. Keep it in your config; Claude Code and `ccs model
+test` strip it only when sending the request, because proxies reject it in the
+body. `ccs model doctor` prints, per provider, the resolved id and the
+on-the-wire id (marker removed). It is read-only — use `ccs model edit` to change
+fields. Tier aliases (`opus`/`sonnet`/`haiku`) in `ANTHROPIC_MODEL` or `model`
+expand to the matching `ANTHROPIC_DEFAULT_*_MODEL`.
 
-- **OK** — every requested check passed; the provider is fully usable.
-- **OK~** — streaming works (the provider *is* usable for normal Claude Code
-  chat) but the optional tool-call probe could not confirm a `tool_use` block
-  this run. This is a caveat, not an outage: it covers gateways whose tool
-  support is limited and transient tool-request hiccups alike.
-- **FAIL** — the streaming check failed (bad token, no balance, unknown model,
-  unreachable endpoint). The provider is not currently usable.
+## TUI keys
 
-Availability is judged by **streaming**: a provider whose stream check passed is
-never shown as FAIL just because a tool probe errored (the detailed table still
-shows the per-check truth). The tool probe deliberately mirrors how Claude Code
-calls tools — it supplies the tool list but does *not* send a forced
-`tool_choice`, since directives like `"any"` are rejected by several
-Anthropic-compatible gateways that relay `tool_use` perfectly under the default
-mode. That mismatch was the original source of false "tool failed" verdicts.
-
-### The `[1m]` context-window marker
-
-A model id in your config may carry a trailing marker such as `[1m]` or
-`[200k]`, e.g. `claude-opus-4-8[1m]`. This is **not** corruption — it is the
-annotation Claude Code uses to select the larger context window (the same
-marker you see on a running session's model id). Keep it in your config: Claude
-Code, and `ccs model test`, strip it automatically *before* sending a request,
-because proxies reject the marker if it leaks into the request body while they
-accept the clean name. So a `[1m]` suffix in your files is expected and correct.
-
-`ccs model doctor` prints, per provider, the resolved model id and the
-on-the-wire id (with the marker removed) so you can confirm what is actually
-sent. It is read-only and never rewrites your files; use `ccs model edit` to
-change fields by hand.
-
-The model id is otherwise resolved the way Claude Code resolves it: a tier alias
-such as `opus`/`sonnet`/`haiku` in `ANTHROPIC_MODEL` (or the top-level `model`)
-is expanded to the matching `ANTHROPIC_DEFAULT_*_MODEL`.
-
----
-
-## `local` merge vs overwrite
-
-By default `ccs local <name>` **deep-merges** into `.claude/settings.local.json`:
-
-- Provider env keys override same-name env values in the file.
-- Provider top-level `model` overrides the file's `model`.
-- **Everything else in the file is preserved** — `permissions`, hooks, MCP
-  configuration, unknown project keys.
-
-Use `--overwrite` when you want the provider file copied verbatim into the
-project (dropping any project-specific keys). Use `--path <dir>` or
-`--path <file>` to write somewhere other than the current directory.
-
----
-
-## TUI cheat sheet
-
-Bare `ccs model` opens the manager. Keys:
+Manager (bare `ccs model`):
 
 | Key | Action |
 |---|---|
-| `↑` `↓` `j` `k` | Navigate |
-| `/` | Search / filter |
-| `enter` `u` | Activate globally |
-| `a` | Add a new model |
-| `n` | Rename the selected model |
-| `e` | Edit the selected model |
-| `d` | Delete (with confirmation) |
-| `v` `space` | Preview JSON (token masked) |
-| `t` | Test selected |
-| `T` | Test all |
-| `r` | Reload models & test status |
-| `q` `esc` | Quit |
+| `↑↓` `j` `k` | navigate |
+| `/` | search / filter |
+| `enter` `u` | activate globally |
+| `a` / `n` / `e` / `d` | add / rename / edit / delete |
+| `v` `space` | preview JSON (masked) |
+| `t` / `T` | test selected / test all |
+| `r` | reload models & status |
+| `q` `esc` | quit |
 
-Editor (`ccs model edit <name>`):
+Editor (`ccs model edit <name>`): `tab`/`shift+tab` move fields, `ctrl+j`
+toggle raw JSON, `ctrl+s` save, `esc` cancel.
 
-| Key | Action |
-|---|---|
-| `tab` / `shift+tab` | Move between fields |
-| `ctrl+j` | Toggle raw JSON edit mode |
-| `ctrl+s` | Save |
-| `esc` | Cancel / return from raw JSON to fields |
+Non-TTY invocations (`use`, `local`, `edit`, `model`) require an explicit name;
+the tool refuses to open the TUI outside a terminal so scripts fail loudly.
 
-Non-terminal invocations (`ccs use`, `ccs local`, `ccs model edit`, `ccs model`)
-require an explicit name; the tool refuses to open the TUI outside a TTY so
-scripts fail loudly rather than hang.
-
----
-
-## Files on disk
+## Files
 
 ```
 ~/.cc-switch-cli/
-├─ config.toml                    target settings.json path
-├─ models/*.json                  provider library (one file per provider)
-├─ default.json                   first-switch snapshot
-├─ default-YYYYMMDD-HHMMSS.json   timestamped twin
-├─ backup-YYYYMMDD-HHMMSS.json    manual backups from `ccs backup`
-├─ <provider>.current             marker for the active provider
-├─ model-switch.logs              append-only audit log of switches
-└─ test-status.json               last availability check per provider
+├─ config.toml                  target settings.json path
+├─ models/*.json                provider library
+├─ <provider>.current           marker for the active provider
+├─ default*.json / backup-*.json  first-switch + manual backups
+├─ model-switch.logs            append-only switch audit log
+└─ test-status.json             last availability check per provider
 ```
 
-Sensitive values (`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`) are masked in
-`model show` and TUI previews. Pass `--reveal` on `model show` for raw JSON.
-`test-status.json` never stores request bodies or tokens.
+`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` are masked in `model show` and TUI
+previews unless `--reveal`; the status cache never stores tokens or request bodies.
 
----
-
-## Migration from v1
-
-The command surface was reshaped in v2. Rough equivalents:
+## v1 → v2
 
 | v1 | v2 |
 |---|---|
@@ -252,6 +161,5 @@ The command surface was reshaped in v2. Rough equivalents:
 | `cc-switch-cli model backup` | `ccs backup` |
 | `cc-switch-cli local <name> [path] --force` | `ccs local <name> [--path <p>] [--overwrite]` |
 
-`local` semantics changed: v2 defaults to `.claude/settings.local.json` inside
-the project (v1 wrote to the current directory root) and merges by default.
-Pass `--overwrite` if you want v1's byte-copy behaviour.
+`local` now defaults to `.claude/settings.local.json` and merges (v1 wrote to the
+directory root and byte-copied). Pass `--overwrite` for v1 behaviour.
