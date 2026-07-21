@@ -2,3 +2,6 @@
 *.exe
 **/cc-switch-cli
 .idea
+dist
+
+claudecode.bat
