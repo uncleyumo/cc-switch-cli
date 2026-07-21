@@ -1,11 +1,11 @@
 # cc-switch-cli
 
 A library of Claude Code provider configs, swapped into `~/.claude/settings.json`
-with one command. Single Go binary, short alias **`ccs`**.
+with one command. Single Go binary, short alias **`ccsc`**.
 
 ```bash
-ccs use packy-bridge   # swap the global provider (atomic, auto-backup)
-ccs current            # → packy-bridge
+ccsc use packy-bridge   # swap the global provider (atomic, auto-backup)
+ccsc current            # → packy-bridge
 ```
 
 Requires Go 1.24.5+ to build.
@@ -14,15 +14,15 @@ Requires Go 1.24.5+ to build.
 
 ```bash
 git clone <repo> && cd cc-switch-cli
-build.bat              # Windows: cc-switch-cli.exe + ccs.exe
+build.bat              # Windows: cc-switch-cli.exe + ccsc.exe
 # or, any OS:
-go build -ldflags="-s -w" -o ccs .
+go build -ldflags="-s -w" -o ccsc .
 ```
 
 Put the binary on `PATH`, then:
 
 ```bash
-ccs init               # create ~/.cc-switch-cli/ + config.toml
+ccsc init               # create ~/.cc-switch-cli/ + config.toml
 ```
 
 Each file in `~/.cc-switch-cli/models/` is one complete Claude Code `settings.json`:
@@ -41,7 +41,7 @@ Each file in `~/.cc-switch-cli/models/` is one complete Claude Code `settings.js
 ## Commands
 
 ```
-ccs (cc-switch-cli)
+ccsc (cc-switch-cli)
 ├─ init                          create ~/.cc-switch-cli + config.toml
 ├─ use [model]                   activate globally; no arg → TUI picker
 ├─ current                       print the active model
@@ -71,27 +71,27 @@ ccs (cc-switch-cli)
 ## Typical use
 
 ```bash
-ccs model add my-proxy           # template + open the editor
-ccs model test                   # availability-check every provider
-ccs use my-proxy                 # activate globally
-cd my-project && ccs local my-proxy   # scope it to one project
-ccs model show my-proxy --reveal # full JSON with secrets
+ccsc model add my-proxy           # template + open the editor
+ccsc model test                   # availability-check every provider
+ccsc use my-proxy                 # activate globally
+cd my-project && ccsc local my-proxy   # scope it to one project
+ccsc model show my-proxy --reveal # full JSON with secrets
 ```
 
-## `ccs local` — merge by default
+## `ccsc local` — merge by default
 
-`ccs local <name>` deep-merges into `./.claude/settings.local.json`: the
+`ccsc local <name>` deep-merges into `./.claude/settings.local.json`: the
 provider's `env` keys and top-level `model` override same-name values, and
 **everything else is preserved** (permissions, hooks, MCP config, unknown keys).
 
 - `--overwrite` — copy the provider file verbatim (drops project-specific keys).
 - `--path <dir>` / `--path <file>` — write elsewhere than the current directory.
 
-## `ccs model test` — availability
+## `ccsc model test` — availability
 
 Runs real Anthropic Messages calls (streaming + a tool-call probe), so expect a
 small token cost. Results are cached in `~/.cc-switch-cli/test-status.json` and
-shown per model in `ccs model list`.
+shown per model in `ccsc model list`.
 
 | Status | Meaning |
 |---|---|
@@ -107,16 +107,16 @@ like `"any"` are rejected by several gateways that relay tools fine.
 ## The `[1m]` / `[200k]` context marker
 
 A trailing marker like `claude-opus-4-8[1m]` is **not** corruption — it selects
-the larger context window. Keep it in your config; Claude Code and `ccs model
+the larger context window. Keep it in your config; Claude Code and `ccsc model
 test` strip it only when sending the request, because proxies reject it in the
-body. `ccs model doctor` prints, per provider, the resolved id and the
-on-the-wire id (marker removed). It is read-only — use `ccs model edit` to change
+body. `ccsc model doctor` prints, per provider, the resolved id and the
+on-the-wire id (marker removed). It is read-only — use `ccsc model edit` to change
 fields. Tier aliases (`opus`/`sonnet`/`haiku`) in `ANTHROPIC_MODEL` or `model`
 expand to the matching `ANTHROPIC_DEFAULT_*_MODEL`.
 
 ## TUI keys
 
-Manager (bare `ccs model`):
+Manager (bare `ccsc model`):
 
 | Key | Action |
 |---|---|
@@ -129,7 +129,7 @@ Manager (bare `ccs model`):
 | `r` | reload models & status |
 | `q` `esc` | quit |
 
-Editor (`ccs model edit <name>`): `tab`/`shift+tab` move fields, `ctrl+j`
+Editor (`ccsc model edit <name>`): `tab`/`shift+tab` move fields, `ctrl+j`
 toggle raw JSON, `ctrl+s` save, `esc` cancel.
 
 Non-TTY invocations (`use`, `local`, `edit`, `model`) require an explicit name;
@@ -154,12 +154,12 @@ previews unless `--reveal`; the status cache never stores tokens or request bodi
 
 | v1 | v2 |
 |---|---|
-| `cc-switch-cli list` | `ccs model list` |
-| `cc-switch-cli cat <name>` | `ccs model show <name>` |
-| `cc-switch-cli model set <name>` | `ccs use <name>` |
-| `cc-switch-cli model current` | `ccs current` |
-| `cc-switch-cli model backup` | `ccs backup` |
-| `cc-switch-cli local <name> [path] --force` | `ccs local <name> [--path <p>] [--overwrite]` |
+| `cc-switch-cli list` | `ccsc model list` |
+| `cc-switch-cli cat <name>` | `ccsc model show <name>` |
+| `cc-switch-cli model set <name>` | `ccsc use <name>` |
+| `cc-switch-cli model current` | `ccsc current` |
+| `cc-switch-cli model backup` | `ccsc backup` |
+| `cc-switch-cli local <name> [path] --force` | `ccsc local <name> [--path <p>] [--overwrite]` |
 
 `local` now defaults to `.claude/settings.local.json` and merges (v1 wrote to the
 directory root and byte-copied). Pass `--overwrite` for v1 behaviour.
