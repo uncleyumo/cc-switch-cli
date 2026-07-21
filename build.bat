@@ -27,5 +27,5 @@ if not %errorlevel% equ 0 (
     exit /b 1
 )
 
-echo Built cc-switch-cli.exe and ccs.exe ^(v%VERSION%, commit %COMMIT%, %BUILD_DATE%^)
+echo Built cc-switch-cli.exe and ccsc.exe ^(v%VERSION%, commit %COMMIT%, %BUILD_DATE%^)
 endlocal
