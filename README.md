@@ -1,25 +1,58 @@
 # cc-switch-cli
 
+[English](README.md) | [中文](README_zh.md)
+
 A library of Claude Code provider configs, swapped into `~/.claude/settings.json`
-with one command. Single Go binary, short alias **`ccsc`**.
+with one command. Single Go binary; rename it to a short name such as **`ccsc`**
+(or **`ccs`**) on your `PATH`.
 
 ```bash
 ccsc use packy-bridge   # swap the global provider (atomic, auto-backup)
 ccsc current            # → packy-bridge
 ```
 
-Requires Go 1.24.5+ to build.
+Requires Go 1.24.5+ to build from source.
 
 ## Install
 
+### Prebuilt binaries (recommended)
+
+Download the asset for your platform from the
+[GitHub Releases](https://github.com/<owner>/cc-switch-cli/releases) page
+(or your own mirror), then put it on `PATH` and rename if you want a short name:
+
+| Platform | Asset |
+|---|---|
+| Windows x86_64 | `cc-switch-cli_<version>_windows_amd64.exe` |
+| Windows ARM64 | `cc-switch-cli_<version>_windows_arm64.exe` |
+| Linux x86_64 | `cc-switch-cli_<version>_linux_amd64` |
+| Linux ARM64 | `cc-switch-cli_<version>_linux_arm64` |
+| macOS Intel | `cc-switch-cli_<version>_darwin_amd64` |
+| macOS Apple Silicon | `cc-switch-cli_<version>_darwin_arm64` |
+
+```bash
+# Linux / macOS example
+chmod +x cc-switch-cli_*_linux_amd64
+mv cc-switch-cli_*_linux_amd64 ~/.local/bin/ccsc
+
+# Windows (PowerShell) example
+# Move-Item cc-switch-cli_*_windows_amd64.exe $env:USERPROFILE\bin\ccsc.exe
+```
+
+### Build from source
+
 ```bash
 git clone <repo> && cd cc-switch-cli
-build.bat              # Windows: cc-switch-cli.exe + ccsc.exe
-# or, any OS:
+
+# Windows: multi-platform release artifacts under dist/
+build.bat
+# optional: set VERSION=2.0.1 && build.bat
+
+# any OS — local binary only
 go build -ldflags="-s -w" -o ccsc .
 ```
 
-Put the binary on `PATH`, then:
+Then initialize the config directory:
 
 ```bash
 ccsc init               # create ~/.cc-switch-cli/ + config.toml
@@ -37,6 +70,9 @@ Each file in `~/.cc-switch-cli/models/` is one complete Claude Code `settings.js
   "model": "sonnet"
 }
 ```
+
+Bundled templates live in the repo under `models/` (`claude`, `deepseek`, `mimo`) —
+copy or adapt them after `init`.
 
 ## Commands
 
@@ -149,6 +185,22 @@ the tool refuses to open the TUI outside a terminal so scripts fail loudly.
 
 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` are masked in `model show` and TUI
 previews unless `--reveal`; the status cache never stores tokens or request bodies.
+
+## Build matrix
+
+`build.bat` cross-compiles six static binaries into `dist/`:
+
+```
+cc-switch-cli_<version>_windows_amd64.exe
+cc-switch-cli_<version>_windows_arm64.exe
+cc-switch-cli_<version>_linux_amd64
+cc-switch-cli_<version>_linux_arm64
+cc-switch-cli_<version>_darwin_amd64
+cc-switch-cli_<version>_darwin_arm64
+```
+
+Naming follows the common Go release convention: `name_version_os_arch`.
+`darwin` is macOS (Go toolchain name for the Darwin kernel).
 
 ## v1 → v2
 
