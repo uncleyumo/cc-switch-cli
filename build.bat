@@ -26,11 +26,17 @@ echo.
 
 call :build windows amd64 .exe
 if errorlevel 1 goto :fail
+call :build windows arm64 .exe
+if errorlevel 1 goto :fail
 
 call :build linux amd64
 if errorlevel 1 goto :fail
+call :build linux arm64
+if errorlevel 1 goto :fail
 
 call :build darwin amd64
+if errorlevel 1 goto :fail
+call :build darwin arm64
 if errorlevel 1 goto :fail
 
 echo.
