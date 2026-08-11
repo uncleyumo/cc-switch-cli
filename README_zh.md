@@ -95,6 +95,20 @@ ccsc (cc-switch-cli)
 │  │   --timeout 30s  --concurrency 4  --auth auto|bearer|x-api-key
 │  ├─ doctor                     打印解析后 / 实际上线的 model id（只读）
 │  └─ tui                        显式打开管理器（等同裸 `model`）
+├─ mcp                           MCP 管理器 TUI（无子命令时）
+│  ├─ list, ls [--scope S]       列出服务器（user / local / project）
+│  ├─ show <name> [--scope S] [--reveal]
+│  ├─ add <name> [--scope local] [-t stdio|http|sse|ws] [-e K=V] [-H "K: V"] -- <cmd|url>
+│  ├─ add-json <name> <json> [--scope S]
+│  ├─ remove, rm <name> [--scope S] [-y]
+│  ├─ test [name...]             initialize + tools/list 探测
+│  │   --scope S  --timeout 30s  --concurrency 4
+│  ├─ tools <name> [--scope S]   列出服务器暴露的工具
+│  └─ tui                        显式打开管理器（等同裸 `mcp`）
+├─ export                        加密导出模型 + 用户级 MCP
+│    -o FILE  --models all|none|a,b  --mcps all|none|x,y  --secret-file F
+├─ import <file>                 解密并导入
+│    --secret-file F  --force
 └─ config, cfg
    ├─ show                       解析后的路径 + 当前模型
    └─ set-target <path>          修改目标 settings.json
@@ -110,6 +124,12 @@ ccsc model test                   # 对每个提供商做可用性检查
 ccsc use my-proxy                 # 全局激活
 cd my-project && ccsc local my-proxy   # 仅作用于当前项目
 ccsc model show my-proxy --reveal # 带密钥的完整 JSON
+
+ccsc mcp list                     # 查看 MCP 服务器
+ccsc mcp test fetch-mcp           # 探测单个服务器
+ccsc mcp                          # 交互式 MCP 管理器
+ccsc export --models all --mcps all --secret-file secret.txt -o backup.json
+ccsc import backup.json --secret-file secret.txt
 ```
 
 ## `ccsc local` — 默认深度合并
@@ -145,6 +165,30 @@ id（已去标记）。它是只读的 — 改字段请用 `ccsc model edit`。
 `ANTHROPIC_MODEL` 或 `model` 里的档位别名（`opus`/`sonnet`/`haiku`）会展开为
 对应的 `ANTHROPIC_DEFAULT_*_MODEL`。
 
+## `ccsc mcp` — MCP 服务器
+
+管理 Claude Code 加载的 MCP 服务器：
+
+| 范围 | 存储位置 |
+|---|---|
+| **user** | `~/.claude.json` 顶层 `mcpServers` |
+| **local**（`add` 默认） | `~/.claude.json` → `projects.<cwd>.mcpServers` |
+| **project** | `<cwd>/.mcp.json` |
+
+`ccsc mcp test` 会真实执行 initialize 握手与 `tools/list`（stdio / Streamable HTTP，
+兼容旧版 SSE）。结果缓存到 `~/.cc-switch-cli/mcp-test-status.json`。WebSocket
+可配置但当前不探测。敏感值默认脱敏，`--reveal` 可查看原文。
+
+写入会直接修改 `~/.claude.json`（并在 `~/.cc-switch-cli/backups/` 留时间戳备份）。
+建议在 Claude Code 关闭时编辑 — 运行中的会话退出时可能回写该文件。
+
+## `ccsc export` / `ccsc import`
+
+在机器间迁移**全局**模型库与**用户级** MCP 服务器。导出文件为 AES-256-GCM
+加密信封（scrypt 派生密钥）；导入前会校验格式版本，不兼容时在索要密钥前失败。
+终端下可交互勾选，也可用 `--models` / `--mcps`（`all` / `none` / 逗号列表）。
+导入时已存在条目默认跳过，除非 `--force`。
+
 ## TUI 快捷键
 
 管理器（裸 `ccsc model`）：
@@ -160,8 +204,20 @@ id（已去标记）。它是只读的 — 改字段请用 `ccsc model edit`。
 | `r` | 重载模型与状态 |
 | `q` `esc` | 退出 |
 
-编辑器（`ccsc model edit <name>`）：`tab`/`shift+tab` 切换字段，`ctrl+j`
-切换原始 JSON，`ctrl+s` 保存，`esc` 取消。
+MCP 管理器（裸 `ccsc mcp`）：
+
+| 键 | 动作 |
+|---|---|
+| `enter` `l` | 列出选中服务器的工具 |
+| `a` / `e` / `n` / `d` | 新增 / 编辑 / 重命名 / 删除 |
+| `v` `space` | 预览 JSON（脱敏） |
+| `t` / `T` | 探测当前 / 探测可见全部 |
+| `s` | 循环 scope 过滤（all/user/local/project） |
+| `r` | 重载 |
+| `q` `esc` | 退出 |
+
+编辑器（`ccsc model edit <name>` 或 MCP 的 `e`）：`tab`/`shift+tab` 切换字段，
+`ctrl+j` 切换原始 JSON，`ctrl+s` 保存，`esc` 取消。
 
 非 TTY 调用（`use`、`local`、`edit`、`model`）必须显式给出名称；在无终端
 环境下会拒绝打开 TUI，让脚本尽早失败。

@@ -97,6 +97,20 @@ ccsc (cc-switch-cli)
 │  │   --timeout 30s  --concurrency 4  --auth auto|bearer|x-api-key
 │  ├─ doctor                     show resolved vs on-the-wire model id (read-only)
 │  └─ tui                        explicit manager (same as bare `model`)
+├─ mcp                           MCP manager TUI (no subcommand)
+│  ├─ list, ls [--scope S]       list servers (user / local / project)
+│  ├─ show <name> [--scope S] [--reveal]
+│  ├─ add <name> [--scope local] [-t stdio|http|sse|ws] [-e K=V] [-H "K: V"] -- <cmd|url>
+│  ├─ add-json <name> <json> [--scope S]
+│  ├─ remove, rm <name> [--scope S] [-y]
+│  ├─ test [name...]             initialize + tools/list probe
+│  │   --scope S  --timeout 30s  --concurrency 4
+│  ├─ tools <name> [--scope S]   list tools exposed by a server
+│  └─ tui                        explicit manager (same as bare `mcp`)
+├─ export                        encrypted export of models + user-scope MCPs
+│    -o FILE  --models all|none|a,b  --mcps all|none|x,y  --secret-file F
+├─ import <file>                 decrypt and apply an export
+│    --secret-file F  --force
 └─ config, cfg
    ├─ show                       resolved paths + current model
    └─ set-target <path>          change the target settings.json
@@ -112,6 +126,12 @@ ccsc model test                   # availability-check every provider
 ccsc use my-proxy                 # activate globally
 cd my-project && ccsc local my-proxy   # scope it to one project
 ccsc model show my-proxy --reveal # full JSON with secrets
+
+ccsc mcp list                     # show MCP servers (all scopes)
+ccsc mcp test fetch-mcp           # probe one server
+ccsc mcp                          # interactive MCP manager
+ccsc export --models all --mcps all --secret-file secret.txt -o backup.json
+ccsc import backup.json --secret-file secret.txt
 ```
 
 ## `ccsc local` — merge by default
@@ -150,6 +170,34 @@ on-the-wire id (marker removed). It is read-only — use `ccsc model edit` to ch
 fields. Tier aliases (`opus`/`sonnet`/`haiku`) in `ANTHROPIC_MODEL` or `model`
 expand to the matching `ANTHROPIC_DEFAULT_*_MODEL`.
 
+## `ccsc mcp` — MCP servers
+
+Manages the MCP servers Claude Code loads from:
+
+| Scope | Storage |
+|---|---|
+| **user** | `~/.claude.json` top-level `mcpServers` |
+| **local** (default for `add`) | `~/.claude.json` → `projects.<cwd>.mcpServers` |
+| **project** | `<cwd>/.mcp.json` |
+
+`ccsc mcp test` runs a real initialize handshake and `tools/list` over stdio /
+Streamable HTTP (with legacy SSE fallback). Results cache in
+`~/.cc-switch-cli/mcp-test-status.json`. WebSocket is stored but not probed.
+Sensitive values (tokens, DSN passwords) are masked unless `--reveal`.
+
+Edits write `~/.claude.json` directly (with a timestamped backup under
+`~/.cc-switch-cli/backups/`). Prefer editing while Claude Code is closed —
+a running session may rewrite the file on exit.
+
+## `ccsc export` / `ccsc import`
+
+Moves **global** model library files and **user-scope** MCP servers between
+machines. The file is an authenticated AES-256-GCM envelope (scrypt-derived key);
+format version is checked before the secret is requested so incompatible
+exports fail early. Selection is interactive in a TTY, or via
+`--models` / `--mcps` (`all` / `none` / comma list). Existing entries are skipped
+on import unless `--force`.
+
 ## TUI keys
 
 Manager (bare `ccsc model`):
@@ -165,11 +213,24 @@ Manager (bare `ccsc model`):
 | `r` | reload models & status |
 | `q` `esc` | quit |
 
-Editor (`ccsc model edit <name>`): `tab`/`shift+tab` move fields, `ctrl+j`
-toggle raw JSON, `ctrl+s` save, `esc` cancel.
+MCP manager (bare `ccsc mcp`):
 
-Non-TTY invocations (`use`, `local`, `edit`, `model`) require an explicit name;
-the tool refuses to open the TUI outside a terminal so scripts fail loudly.
+| Key | Action |
+|---|---|
+| `enter` `l` | list tools of selected server |
+| `a` / `e` / `n` / `d` | add / edit / rename / delete |
+| `v` `space` | view JSON (masked) |
+| `t` / `T` | probe selected / all visible |
+| `s` | cycle scope filter (all/user/local/project) |
+| `r` | reload |
+| `q` `esc` | quit |
+
+Editor (`ccsc model edit <name>` or MCP `e`): `tab`/`shift+tab` move fields,
+`ctrl+j` toggle raw JSON, `ctrl+s` save, `esc` cancel.
+
+Non-TTY invocations (`use`, `local`, `edit`, `model`, `mcp`) require an explicit
+name or subcommand; the tool refuses to open the TUI outside a terminal so
+scripts fail loudly.
 
 ## Files
 
@@ -177,6 +238,9 @@ the tool refuses to open the TUI outside a terminal so scripts fail loudly.
 ~/.cc-switch-cli/
 ├─ config.toml                  target settings.json path
 ├─ models/*.json                provider library
+├─ test-status.json             model probe cache
+├─ mcp-test-status.json         MCP probe cache
+├─ backups/claude-json-*.json   pre-mutation snapshots of ~/.claude.json
 ├─ <provider>.current           marker for the active provider
 ├─ default*.json / backup-*.json  first-switch + manual backups
 ├─ model-switch.logs            append-only switch audit log
