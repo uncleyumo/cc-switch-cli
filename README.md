@@ -18,7 +18,7 @@ Requires Go 1.24.5+ to build from source.
 ### Prebuilt binaries (recommended)
 
 Download the asset for your platform from the
-[GitHub Releases](https://github.com/<owner>/cc-switch-cli/releases) page
+[[GitHub Releases](https://github.com/<owner>/cc-switch-cli/releases)](https://github.com/uncleyumo/cc-switch-cli/releases) page
 (or your own mirror), then put it on `PATH` and rename if you want a short name:
 
 | Platform | Asset |
