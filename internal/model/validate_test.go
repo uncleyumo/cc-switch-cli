@@ -53,3 +53,13 @@ func TestValidate(t *testing.T) {
 		t.Fatalf("valid model rejected: %v", err)
 	}
 }
+func TestValidateContextWindow(t *testing.T) {
+	m := &Model{Env: Env{BaseURL: "https://x", Model: "grok-4.6", MaxContextTokens: "nope"}}
+	if err := Validate(m); err == nil {
+		t.Fatal("invalid context window must be rejected")
+	}
+	m.Env.MaxContextTokens = "500000"
+	if err := Validate(m); err != nil {
+		t.Fatalf("stored integer 500000 should be accepted: %v", err)
+	}
+}

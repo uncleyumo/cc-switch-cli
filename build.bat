@@ -8,7 +8,7 @@ if not defined COMMIT set "COMMIT=none"
 for /f %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd" 2^>nul') do set "BUILD_DATE=%%d"
 if not defined BUILD_DATE set "BUILD_DATE=unknown"
 
-if not defined VERSION set "VERSION=2.1.0"
+if not defined VERSION set "VERSION=2.1.2"
 
 set "LDFLAGS=-s -w -X cc-switch-cli/internal/version.Version=%VERSION% -X cc-switch-cli/internal/version.Commit=%COMMIT% -X cc-switch-cli/internal/version.Date=%BUILD_DATE%"
 set "CGO_ENABLED=0"

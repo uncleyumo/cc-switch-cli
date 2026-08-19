@@ -160,16 +160,25 @@ FAIL, even if the tool probe errored transiently. The tool probe mirrors Claude
 Code — it sends the tool list but omits `tool_choice`, since forced directives
 like `"any"` are rejected by several gateways that relay tools fine.
 
-## The `[1m]` / `[200k]` context marker
+## Context window
 
-A trailing marker like `claude-opus-4-8[1m]` is **not** corruption — it selects
-the larger context window. Keep it in your config; Claude Code and `ccsc model
-test` strip it only when sending the request, because proxies reject it in the
-body. `ccsc model doctor` prints, per provider, the resolved id and the
-on-the-wire id (marker removed). It is read-only — use `ccsc model edit` to change
-fields. Tier aliases (`opus`/`sonnet`/`haiku`) in `ANTHROPIC_MODEL` or `model`
-expand to the matching `ANTHROPIC_DEFAULT_*_MODEL`.
+The **context window** field on a provider is the group default. Type it as
+`128k` / `256k` / `500k` / `1m` / `2m` — the same spelling is shown when you
+reopen the editor. Bare numbers (`500`, `500000`) are rejected. On disk the
+value is stored as a plain integer for Claude Code
+(`CLAUDE_CODE_MAX_CONTEXT_TOKENS`). `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is
+written only when the size is at most 1M and no id in the group has a `[1m]`
+suffix.
 
+On an unrecognized / gateway id, Claude Code treats a trailing `[1m]` as a 1M
+window and then ignores `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for that id. Other
+suffixes such as `[200k]` are stripped on the wire but do not change the
+assumed window. Typical layout: group `500k`, plus `[1m]` on the one id that
+is actually 1M.
+
+`ccsc local` drops the three window keys when the incoming provider does not
+set them. `ccsc model doctor` prints the resolved id, the on-the-wire id, and
+the group window.
 ## `ccsc mcp` — MCP servers
 
 Manages the MCP servers Claude Code loads from:

@@ -66,5 +66,19 @@ func Validate(m *Model) error {
 	if m.ModelID() == "" {
 		return fmt.Errorf("env.%s (or one of the DEFAULT_* models) must not be empty", EnvModel)
 	}
+	for _, pair := range []struct {
+		key, val string
+	}{
+		{EnvMaxContextTokens, m.Env.MaxContextTokens},
+		{EnvAutoCompactWindow, m.Env.AutoCompactWindow},
+		{EnvAutoCompactWindowTokens, m.Env.AutoCompactWindowTokens},
+	} {
+		if pair.val == "" {
+			continue
+		}
+		if _, err := parseStoredWindow(pair.val); err != nil {
+			return fmt.Errorf("env.%s: %w", pair.key, err)
+		}
+	}
 	return nil
 }

@@ -23,6 +23,8 @@ type editorField struct {
 	secret  bool
 }
 
+const fieldContextWindow = "context-window"
+
 // editorMode selects between the structured form and the raw JSON textarea.
 type editorMode int
 
@@ -79,6 +81,7 @@ func newEditorModel(name string, m *model.Model) (editorModel, error) {
 		{label: "ANTHROPIC_DEFAULT_OPUS_MODEL", envKey: model.EnvDefaultOpusModel, input: newInput(m.Env.DefaultOpusModel, false)},
 		{label: "ANTHROPIC_DEFAULT_SONNET_MODEL", envKey: model.EnvDefaultSonnetModel, input: newInput(m.Env.DefaultSonnetModel, false)},
 		{label: "model (top-level)", restKey: "model", input: newInput(m.TopLevelModel(), false)},
+		{label: "context window", envKey: fieldContextWindow, input: newInput(model.FormatContextWindow(m.Env.ContextWindowTokens()), false)},
 	}
 	fields[0].input.Focus()
 
@@ -213,7 +216,9 @@ func (m *editorModel) refocus() {
 // syncStructuredToRaw takes the current form values and updates the model +
 // textarea so the raw editor starts from what the user has entered so far.
 func (m *editorModel) syncStructuredToRaw() error {
-	m.applyFieldsToModel()
+	if err := m.applyFieldsToModel(); err != nil {
+		return err
+	}
 	out, err := m.model.Indent()
 	if err != nil {
 		return err
@@ -239,11 +244,12 @@ func (m *editorModel) syncRawToStructured() error {
 	m.fields[5].input.SetValue(parsed.Env.DefaultOpusModel)
 	m.fields[6].input.SetValue(parsed.Env.DefaultSonnetModel)
 	m.fields[7].input.SetValue(parsed.TopLevelModel())
+	m.fields[8].input.SetValue(model.FormatContextWindow(parsed.Env.ContextWindowTokens()))
 	return nil
 }
 
 // applyFieldsToModel copies form field values into the in-memory model.
-func (m *editorModel) applyFieldsToModel() {
+func (m *editorModel) applyFieldsToModel() error {
 	env := &m.model.Env
 	if m.model.Rest == nil {
 		m.model.Rest = map[string]json.RawMessage{}
@@ -265,6 +271,12 @@ func (m *editorModel) applyFieldsToModel() {
 			env.DefaultOpusModel = val
 		case model.EnvDefaultSonnetModel:
 			env.DefaultSonnetModel = val
+		case fieldContextWindow:
+			n, err := model.ParseContextWindow(val)
+			if err != nil {
+				return err
+			}
+			m.model.ApplyContextWindow(n)
 		}
 		if f.restKey == "model" {
 			if val == "" {
@@ -274,6 +286,7 @@ func (m *editorModel) applyFieldsToModel() {
 			}
 		}
 	}
+	return nil
 }
 
 func (m *editorModel) applyAndSave() error {
@@ -281,7 +294,9 @@ func (m *editorModel) applyAndSave() error {
 		return errors.New("no model loaded")
 	}
 	if m.mode == editStructured {
-		m.applyFieldsToModel()
+		if err := m.applyFieldsToModel(); err != nil {
+			return err
+		}
 	}
 	if err := model.Validate(m.model); err != nil {
 		return err
@@ -321,6 +336,8 @@ func (m editorModel) View() string {
 	hints := "tab: next  •  shift+tab: prev  •  ctrl+j: JSON mode  •  ctrl+s: save  •  esc: cancel"
 	if m.mode == editRaw {
 		hints = "ctrl+j: back to fields  •  ctrl+s: save  •  esc: cancel"
+	} else {
+		hints += "\ncontext window: 128k / 256k / 500k / 1m / 2m (empty = Claude Code default)"
 	}
 	b.WriteString(helpStyle.Render(hints))
 	return b.String()

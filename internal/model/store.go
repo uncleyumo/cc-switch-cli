@@ -114,6 +114,9 @@ func Save(name string, m *Model) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create models directory: %w", err)
 	}
+	if m != nil {
+		m.NormalizeContextWindow()
+	}
 	data, err := m.Indent()
 	if err != nil {
 		return err

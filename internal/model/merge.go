@@ -10,6 +10,10 @@ import (
 // document. base may be empty (no existing file). The provider's env keys and
 // top-level "model" override the base; every other base key is preserved.
 //
+// Model-scoped env keys (context-window declarations) are an exception: if the
+// incoming provider does not set one, the existing value is dropped so a
+// previous model's 500k/1m window cannot leak onto the next model.
+//
 // Returns pretty-printed JSON with a trailing newline. Fails without touching
 // the base file if the base is not valid JSON.
 func MergeProviderInto(base []byte, provider *Model) ([]byte, error) {
@@ -42,6 +46,11 @@ func MergeProviderInto(base []byte, provider *Model) ([]byte, error) {
 	}
 	for k, v := range providerEnv {
 		existingEnv[k] = v
+	}
+	for _, k := range ModelScopedEnvKeys {
+		if _, ok := providerEnv[k]; !ok {
+			delete(existingEnv, k)
+		}
 	}
 	mergedEnv, err := json.Marshal(existingEnv)
 	if err != nil {

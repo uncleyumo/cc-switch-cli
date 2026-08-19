@@ -156,15 +156,20 @@ MCP、未知键等）。
 对齐 Claude Code 行为 — 发送 tools 列表但不带 `tool_choice`，因为强制
 `"any"` 会被不少能正常转发 tools 的网关拒绝。
 
-## `[1m]` / `[200k]` 上下文标记
+## 上下文窗口
 
-像 `claude-opus-4-8[1m]` 这样的尾部标记**不是损坏** — 它用来选择更大上下文窗口。
-请保留在配置里；Claude Code 与 `ccsc model test` 只在发请求时剥离，因为代理会
-在 body 中拒绝该标记。`ccsc model doctor` 会按提供商打印解析后的 id 与实际上线
-id（已去标记）。它是只读的 — 改字段请用 `ccsc model edit`。
-`ANTHROPIC_MODEL` 或 `model` 里的档位别名（`opus`/`sonnet`/`haiku`）会展开为
-对应的 `ANTHROPIC_DEFAULT_*_MODEL`。
+提供商上的 **context window** 是整组默认窗口。录入写成 `128k` / `256k` /
+`500k` / `1m` / `2m`，再打开编辑器也按这个写法回显。不允许纯数字（`500`、
+`500000`）。落盘时写成 Claude Code 要的整数
+（`CLAUDE_CODE_MAX_CONTEXT_TOKENS`）。窗口不超过 1M 且组内没有任何 id 带
+`[1m]` 时，同时写入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`。
 
+对未识别 / 网关 id，Claude Code 只把尾部 `[1m]` 当成 1M 窗口，并忽略该 id
+上的 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`。`[200k]` 这类后缀只在发请求时剥离，
+不改变假定窗口。常见写法：组填 `500k`，真正是 1M 的那个 id 再加 `[1m]`。
+
+`ccsc local` 在新提供商未声明这三项时会删掉旧值。`ccsc model doctor` 打印
+解析后的 id、实际上线 id 和组窗口。
 ## `ccsc mcp` — MCP 服务器
 
 管理 Claude Code 加载的 MCP 服务器：

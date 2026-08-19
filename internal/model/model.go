@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -25,7 +26,25 @@ const (
 	EnvDefaultHaikuModel  = "ANTHROPIC_DEFAULT_HAIKU_MODEL"
 	EnvDefaultOpusModel   = "ANTHROPIC_DEFAULT_OPUS_MODEL"
 	EnvDefaultSonnetModel = "ANTHROPIC_DEFAULT_SONNET_MODEL"
+
+	// Context-window env keys Claude Code reads for unrecognized / gateway
+	// model IDs. MAX_CONTEXT declares the real window; AUTO_COMPACT_WINDOW
+	// is the documented compact threshold; AUTO_COMPACT_WINDOW_TOKENS is
+	// written alongside it because some Claude Code builds surface that name.
+	EnvMaxContextTokens        = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+	EnvAutoCompactWindow       = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+	EnvAutoCompactWindowTokens = "CLAUDE_CODE_AUTO_COMPACT_WINDOW_TOKENS"
 )
+
+// ModelScopedEnvKeys are per-provider env values that must not leak across
+// `ccsc local` merges. If the incoming provider does not set a key, the
+// existing project file must drop it rather than keep the previous model's
+// window.
+var ModelScopedEnvKeys = []string{
+	EnvMaxContextTokens,
+	EnvAutoCompactWindow,
+	EnvAutoCompactWindowTokens,
+}
 
 // Env holds the Anthropic environment variables that cc-switch-cli understands
 // natively. Unknown env values round-trip through Extra verbatim.
@@ -37,6 +56,10 @@ type Env struct {
 	DefaultHaikuModel  string
 	DefaultOpusModel   string
 	DefaultSonnetModel string
+
+	MaxContextTokens        string
+	AutoCompactWindow       string
+	AutoCompactWindowTokens string
 
 	// Extra preserves any env keys we don't map to a typed field.
 	Extra map[string]json.RawMessage
@@ -57,6 +80,9 @@ func (e Env) MarshalJSON() ([]byte, error) {
 		{EnvDefaultHaikuModel, e.DefaultHaikuModel},
 		{EnvDefaultOpusModel, e.DefaultOpusModel},
 		{EnvDefaultSonnetModel, e.DefaultSonnetModel},
+		{EnvMaxContextTokens, e.MaxContextTokens},
+		{EnvAutoCompactWindow, e.AutoCompactWindow},
+		{EnvAutoCompactWindowTokens, e.AutoCompactWindowTokens},
 	}
 
 	buf := bytes.NewBufferString("{")
@@ -144,6 +170,15 @@ func (e *Env) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if err := typedString(EnvDefaultSonnetModel, &e.DefaultSonnetModel); err != nil {
+		return err
+	}
+	if err := typedString(EnvMaxContextTokens, &e.MaxContextTokens); err != nil {
+		return err
+	}
+	if err := typedString(EnvAutoCompactWindow, &e.AutoCompactWindow); err != nil {
+		return err
+	}
+	if err := typedString(EnvAutoCompactWindowTokens, &e.AutoCompactWindowTokens); err != nil {
 		return err
 	}
 	if len(raw) > 0 {
@@ -300,6 +335,7 @@ var (
 	// it only on the wire (see WireModelID). It is preserved verbatim in the
 	// stored config, so a plain SanitizeModelID must leave it alone.
 	reContextWindow = regexp.MustCompile(`\[\d+[kKmM]\]\s*$`)
+		re1mMarker      = regexp.MustCompile(`(?i)\[1m\]\s*$`)
 )
 
 // SanitizeModelID strips only genuine ANSI escape sequences (real ESC bytes)
@@ -330,6 +366,207 @@ func WireModelID(s string) string {
 		return s
 	}
 	return strings.TrimSpace(reContextWindow.ReplaceAllString(s, ""))
+}
+
+// HasContextMarker reports whether s ends with a trailing [1m]/[200k]-style
+// annotation (stripped on the wire).
+func HasContextMarker(s string) bool {
+	return reContextWindow.FindString(strings.TrimSpace(s)) != ""
+}
+
+// Has1MMarker reports whether s ends with [1m]. On an unrecognized model id
+// Claude Code assumes a 1M window and ignores CLAUDE_CODE_MAX_CONTEXT_TOKENS.
+func Has1MMarker(s string) bool {
+	return re1mMarker.MatchString(strings.TrimSpace(s))
+}
+
+const (
+	minContextWindowTokens = 128_000
+	maxContextWindowTokens = 2_000_000
+	maxAutoCompactTokens   = 1_000_000
+)
+
+// ParseContextWindow accepts the editor/CLI form only: empty, or an integer
+// plus a unit (`128k`, `500k`, `1m`, `2m`). Bare numbers such as `500` or
+// `500000` are rejected so the typed field and the on-screen value stay in
+// the same vocabulary.
+func ParseContextWindow(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	n, err := parseWindowWithUnit(s)
+	if err != nil {
+		return 0, err
+	}
+	return validateContextWindow(n, s)
+}
+
+// parseStoredWindow reads a value that already lives in a provider file.
+// Disk always stores a plain integer for Claude Code; older files or a raw
+// JSON edit may still use the Nk/Nm spelling.
+func parseStoredWindow(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	if n, err := parseWindowWithUnit(s); err == nil {
+		return validateContextWindow(n, s)
+	}
+	if !isAllDigits(s) {
+		return 0, fmt.Errorf("invalid context window %q (use 128k, 500k, 1m, 2m)", s)
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid context window %q", s)
+	}
+	return validateContextWindow(n, s)
+}
+
+func parseWindowWithUnit(s string) (int, error) {
+	compact := strings.ReplaceAll(s, "_", "")
+	compact = strings.ReplaceAll(compact, ",", "")
+	compact = strings.TrimSpace(compact)
+	if compact == "" {
+		return 0, fmt.Errorf("invalid context window %q (use 128k, 500k, 1m, 2m)", s)
+	}
+	last := compact[len(compact)-1]
+	if last != 'k' && last != 'K' && last != 'm' && last != 'M' {
+		return 0, fmt.Errorf("invalid context window %q (use 128k, 500k, 1m, 2m)", s)
+	}
+	num := strings.TrimSpace(compact[:len(compact)-1])
+	if num == "" || !isAllDigits(num) {
+		return 0, fmt.Errorf("invalid context window %q (use 128k, 500k, 1m, 2m)", s)
+	}
+	n, err := strconv.Atoi(num)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("invalid context window %q", s)
+	}
+	if last == 'm' || last == 'M' {
+		return n * 1_000_000, nil
+	}
+	return n * 1_000, nil
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func validateContextWindow(n int, raw string) (int, error) {
+	if n < minContextWindowTokens || n > maxContextWindowTokens {
+		return 0, fmt.Errorf("context window %q is out of range (128k-2m)", raw)
+	}
+	return n, nil
+}
+
+// FormatContextWindow renders a token count as 500k / 1m / 2m. Values that
+// divide evenly by 1M use the m suffix; everything else uses k.
+func FormatContextWindow(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if n%1_000_000 == 0 {
+		return fmt.Sprintf("%dm", n/1_000_000)
+	}
+	if n%1000 == 0 {
+		return fmt.Sprintf("%dk", n/1000)
+	}
+	return fmt.Sprintf("%dk", (n+999)/1000)
+}
+
+// ContextWindowTokens returns the declared group window from MAX_CONTEXT,
+// falling back to AUTO_COMPACT_WINDOW / AUTO_COMPACT_WINDOW_TOKENS. 0 means unset.
+func (e Env) ContextWindowTokens() int {
+	for _, s := range []string{e.MaxContextTokens, e.AutoCompactWindow, e.AutoCompactWindowTokens} {
+		if n, err := parseStoredWindow(s); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// NormalizeContextWindow rewrites any declared window keys to the integer
+// form Claude Code's env parser accepts. "500k" becomes "500000". Compact
+// keys are omitted when any model id in the same provider carries a
+// trailing [1m]/[Nk] marker, so a per-id 1M override is not compacted at
+// the group 500k threshold.
+func (m *Model) NormalizeContextWindow() {
+	if m == nil {
+		return
+	}
+	n := m.Env.ContextWindowTokens()
+	m.ApplyContextWindow(n)
+}
+
+// ApplyContextWindow writes CLAUDE_CODE_MAX_CONTEXT_TOKENS as a plain token
+// count. AUTO_COMPACT_WINDOW is written only when n is within Claude Code's
+// compact range and no model id on this provider has a [1m] suffix.
+// n<=0 clears all three keys.
+func (m *Model) ApplyContextWindow(n int) {
+	if m == nil {
+		return
+	}
+	e := &m.Env
+	if n <= 0 {
+		e.MaxContextTokens = ""
+		e.AutoCompactWindow = ""
+		e.AutoCompactWindowTokens = ""
+		return
+	}
+	e.MaxContextTokens = strconv.Itoa(n)
+	if n <= maxAutoCompactTokens && !m.HasAny1MMarker() {
+		s := strconv.Itoa(n)
+		e.AutoCompactWindow = s
+		e.AutoCompactWindowTokens = s
+		return
+	}
+	e.AutoCompactWindow = ""
+	e.AutoCompactWindowTokens = ""
+}
+
+// HasAny1MMarker reports whether any model-id field on this provider ends
+// with [1m]. Other [Nk] suffixes are stripped on the wire but do not change
+// the window Claude Code assumes for an unrecognized id.
+func (m *Model) HasAny1MMarker() bool {
+	if m == nil {
+		return false
+	}
+	for _, s := range []string{
+		m.Env.Model,
+		m.Env.DefaultHaikuModel,
+		m.Env.DefaultOpusModel,
+		m.Env.DefaultSonnetModel,
+		m.TopLevelModel(),
+	} {
+		if Has1MMarker(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// LooksLikeClaudeModel reports whether the resolved id is one Claude Code
+// treats as a Claude model (so MAX_CONTEXT alone does not change the window).
+func LooksLikeClaudeModel(id string) bool {
+	s := strings.ToLower(WireModelID(id))
+	if s == "" {
+		return false
+	}
+	if _, isTier := tierAliases[s]; isTier {
+		return true
+	}
+	if strings.HasPrefix(s, "claude-") || strings.HasPrefix(s, "anthropic.claude") {
+		return true
+	}
+	return strings.Contains(s, "claude-")
 }
 
 // tierAliases are the Claude Code model tier names that must be resolved to a

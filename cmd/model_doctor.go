@@ -20,12 +20,13 @@ var modelDoctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Show the effective and on-the-wire model id per provider",
 	Long: "For each provider, prints the configured model id, the id after tier-alias\n" +
-		"resolution, and the id actually sent in the request body (\"wire\").\n\n" +
-		"A trailing context-window marker such as \"[1m]\" or \"[200k]\" is a deliberate\n" +
-		"annotation that selects the larger context window in Claude Code. It is kept\n" +
-		"in the config on purpose and is stripped automatically before any request is\n" +
-		"sent — so a \"[1m]\" suffix is normal and must not be removed. This command does\n" +
-		"not modify any file; edit fields with `model edit` if you need to.",
+		"resolution, the id actually sent in the request body (\"wire\"), and the\n" +
+		"declared group context window.\n\n" +
+		"Set the group default with the context-window field in `model edit` (128k /\n" +
+		"256k / 500k / 1m / 2m). A trailing [1m] on an unrecognized id assumes 1M and ignores\n" +
+		"CLAUDE_CODE_MAX_CONTEXT_TOKENS for that id; unmarked siblings keep the group window.\n" +
+		"The marker is kept in the config and stripped automatically before any\n" +
+		"request is sent. This command does not modify any file.",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		names, err := manager.ListModels()
@@ -46,18 +47,25 @@ var modelDoctorCmd = &cobra.Command{
 			}
 			resolved := m.ResolvedModelID()
 			wire := m.WireModelID()
-			line := fmt.Sprintf("  %-20s  resolved %-26s  wire %s",
-				ui.Bold(n), quoteOrDash(resolved), quoteOrDash(wire))
+			window := m.Env.ContextWindowTokens()
+			windowLabel := "-"
+			if window > 0 {
+				windowLabel = model.FormatContextWindow(window)
+			}
+			line := fmt.Sprintf("  %-20s  resolved %-26s  wire %-24s  window %s",
+				ui.Bold(n), quoteOrDash(resolved), quoteOrDash(wire), windowLabel)
 			fmt.Println(line)
 
 			if rawEsc(resolved) {
 				anyEsc = true
 				fmt.Println("    " + ui.Warn("⚠ contains a raw ANSI escape byte (real terminal artifact) — edit this model and re-type the model id by hand"))
 			} else if resolved != "" && resolved != wire {
-				fmt.Println("    " + ui.Dim("[1m]/[200k] context marker kept in config, stripped on the wire (normal)"))
+				fmt.Println("    " + ui.Dim("[1m]/[Nk] kept in config, stripped on the wire (normal)"))
 			} else if resolved == "" {
 				fmt.Println("    " + ui.Warn("no model id could be resolved from this config"))
 			}
+
+			printWindowAdvice(m, resolved, window)
 		}
 
 		fmt.Println()
@@ -68,6 +76,20 @@ var modelDoctorCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+func printWindowAdvice(m *model.Model, resolved string, window int) {
+	if resolved == "" {
+		return
+	}
+	unrecognized := !model.LooksLikeClaudeModel(resolved)
+	if m.HasAny1MMarker() && window > 0 {
+		fmt.Println("    " + ui.Dim("group window " + model.FormatContextWindow(window) + "; ids with [1m] assume 1M and ignore MAX_CONTEXT"))
+		return
+	}
+	if unrecognized && !model.Has1MMarker(resolved) && window == 0 {
+		fmt.Println("    " + ui.Dim("unrecognized id, no declared window — Claude Code assumes 200k unless you set context window"))
+	}
 }
 
 // rawEsc reports whether s contains a genuine ASCII ESC byte (0x1b), which is
