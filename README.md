@@ -84,6 +84,8 @@ ccsc (cc-switch-cli)
 ├─ local [model]                 write ./.claude/settings.local.json (deep-merge)
 │    --overwrite                 copy the provider file verbatim instead
 │    --path <dir|file>           target another dir / explicit file
+│  ├─ show [--reveal]            print project-level model + MCP
+│  └─ clear [--model]            delete the file (or strip only model/env keys)
 ├─ backup                        snapshot the current settings.json
 ├─ model, m                      manager TUI (no subcommand)
 │  ├─ list, ls                   list models + active flag + last test status
@@ -125,6 +127,8 @@ ccsc model add my-proxy           # template + open the editor
 ccsc model test                   # availability-check every provider
 ccsc use my-proxy                 # activate globally
 cd my-project && ccsc local my-proxy   # scope it to one project
+ccsc local show                        # project-level model + MCP
+ccsc local clear                       # drop the project-level override
 ccsc model show my-proxy --reveal # full JSON with secrets
 
 ccsc mcp list                     # show MCP servers (all scopes)
@@ -141,7 +145,11 @@ provider's `env` keys and top-level `model` override same-name values, and
 **everything else is preserved** (permissions, hooks, MCP config, unknown keys).
 
 - `--overwrite` — copy the provider file verbatim (drops project-specific keys).
-- `--path <dir>` / `--path <file>` — write elsewhere than the current directory.
+- `--path <dir>` / `--path <file>` — write / inspect / clear elsewhere than the current directory.
+- `ccsc local show` — summarize the project-local model override plus project-scope (`.mcp.json`) and local-scope (`~/.claude.json` → this project) MCP servers. Tokens are masked unless `--reveal`.
+- `ccsc local clear` — delete `settings.local.json` so the project falls back to the global provider. `ccsc local clear --model` strips only the provider `env` / top-level `model` keys and keeps permissions, hooks and custom env. A leftover-empty file is removed. MCP files are never touched.
+
+If a provider is literally named `clear` or `show`, write it with `ccsc local -- <name>`.
 
 ## `ccsc model test` — availability
 

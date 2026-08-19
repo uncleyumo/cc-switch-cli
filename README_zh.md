@@ -82,6 +82,8 @@ ccsc (cc-switch-cli)
 ├─ local [model]                 写入 ./.claude/settings.local.json（深度合并）
 │    --overwrite                 改为整文件覆盖
 │    --path <dir|file>           指定其它目录 / 文件
+│  ├─ show [--reveal]            打印项目级模型 + MCP
+│  └─ clear [--model]            删除该文件（或只清模型 / env 键）
 ├─ backup                        快照当前 settings.json
 ├─ model, m                      管理器 TUI（无子命令时）
 │  ├─ list, ls                   列出模型 + 激活标记 + 最近测试状态
@@ -123,6 +125,8 @@ ccsc model add my-proxy           # 模板 + 打开编辑器
 ccsc model test                   # 对每个提供商做可用性检查
 ccsc use my-proxy                 # 全局激活
 cd my-project && ccsc local my-proxy   # 仅作用于当前项目
+ccsc local show                        # 查看项目级模型 + MCP
+ccsc local clear                       # 取消项目级覆盖
 ccsc model show my-proxy --reveal # 带密钥的完整 JSON
 
 ccsc mcp list                     # 查看 MCP 服务器
@@ -139,7 +143,11 @@ ccsc import backup.json --secret-file secret.txt
 MCP、未知键等）。
 
 - `--overwrite` — 整文件覆盖（丢弃项目专属键）。
-- `--path <dir>` / `--path <file>` — 写到当前目录以外的位置。
+- `--path <dir>` / `--path <file>` — 写 / 查看 / 清除当前目录以外的位置。
+- `ccsc local show` — 汇总项目级模型覆盖，以及 project 作用域（`.mcp.json`）和 local 作用域（`~/.claude.json` → 当前项目）的 MCP 服务器。默认遮罩 token，加 `--reveal` 才显示原文。
+- `ccsc local clear` — 删除 `settings.local.json`，项目回退到全局提供商。`ccsc local clear --model` 只剥掉提供商的 `env` / 顶层 `model`，保留 permissions、hooks 和自定义 env。剥完若文件变空则一并删除。MCP 文件不会被改动。
+
+若提供商名字恰好叫 `clear` 或 `show`，用 `ccsc local -- <name>` 写入。
 
 ## `ccsc model test` — 可用性
 

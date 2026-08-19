@@ -76,3 +76,78 @@ func TestMergeProviderEnvOverridesSameKey(t *testing.T) {
 		t.Fatalf("stale env value survived merge: %s", string(out))
 	}
 }
+
+func TestStripModelKeysPreservesProjectSettings(t *testing.T) {
+	base := []byte(`{
+	  "permissions": {"allow": ["Bash"]},
+	  "hooks": {"PreToolUse": []},
+	  "model": "sonnet",
+	  "env": {
+	    "ANTHROPIC_AUTH_TOKEN": "sk-secret",
+	    "ANTHROPIC_BASE_URL": "https://x",
+	    "ANTHROPIC_MODEL": "claude-sonnet-4-6",
+	    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000",
+	    "HTTP_PROXY": "http://proxy.local:8080"
+	  }
+	}`)
+	out, emptied, err := StripModelKeys(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emptied {
+		t.Fatal("expected remaining project keys")
+	}
+	s := string(out)
+	if !strings.Contains(s, `"permissions"`) || !strings.Contains(s, `"hooks"`) {
+		t.Fatalf("project keys dropped: %s", s)
+	}
+	if !strings.Contains(s, `"HTTP_PROXY"`) {
+		t.Fatalf("custom env dropped: %s", s)
+	}
+	for _, leak := range []string{"ANTHROPIC_", "CLAUDE_CODE_", `"model"`} {
+		if strings.Contains(s, leak) {
+			t.Fatalf("model key %q survived strip: %s", leak, s)
+		}
+	}
+}
+
+func TestStripModelKeysEmptiesWhenOnlyModel(t *testing.T) {
+	base := []byte(`{"model":"sonnet","env":{"ANTHROPIC_MODEL":"x"}}`)
+	out, emptied, err := StripModelKeys(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !emptied || out != nil {
+		t.Fatalf("want emptied, got emptied=%v out=%q", emptied, out)
+	}
+}
+
+func TestStripModelKeysEmptyBase(t *testing.T) {
+	if _, emptied, err := StripModelKeys(nil); err != nil || !emptied {
+		t.Fatalf("empty base should be emptied, err=%v emptied=%v", err, emptied)
+	}
+	if _, emptied, err := StripModelKeys([]byte("  \n")); err != nil || !emptied {
+		t.Fatalf("whitespace base should be emptied, err=%v emptied=%v", err, emptied)
+	}
+}
+
+func TestStripModelKeysRejectsInvalidJSON(t *testing.T) {
+	if _, _, err := StripModelKeys([]byte("not json")); err == nil {
+		t.Fatal("expected error for invalid json")
+	}
+}
+
+func TestIsModelEnvKey(t *testing.T) {
+	yes := []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_FOO", "CLAUDE_CODE_MAX_CONTEXT_TOKENS"}
+	no := []string{"HTTP_PROXY", "CUSTOM", "anthropic_lower", "CLAUDE_OTHER"}
+	for _, k := range yes {
+		if !IsModelEnvKey(k) {
+			t.Errorf("IsModelEnvKey(%q) = false, want true", k)
+		}
+	}
+	for _, k := range no {
+		if IsModelEnvKey(k) {
+			t.Errorf("IsModelEnvKey(%q) = true, want false", k)
+		}
+	}
+}

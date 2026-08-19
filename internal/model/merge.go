@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // MergeProviderInto deep-merges a provider into an existing settings.local.json
@@ -69,4 +70,64 @@ func MergeProviderInto(base []byte, provider *Model) ([]byte, error) {
 		return nil, err
 	}
 	return append(pretty, '\n'), nil
+}
+
+// IsModelEnvKey reports whether an env key is written by `ccsc local` from a
+// provider (Anthropic auth / model / window). Custom keys such as HTTP_PROXY
+// or user-added extras are left alone by StripModelKeys.
+func IsModelEnvKey(k string) bool {
+	return strings.HasPrefix(k, "ANTHROPIC_") || strings.HasPrefix(k, "CLAUDE_CODE_")
+}
+
+// StripModelKeys removes the provider-owned bits from a settings.local.json
+// document: the top-level "model" key and every env key that `ccsc local`
+// would have written (ANTHROPIC_* / CLAUDE_CODE_*). Everything else
+// (permissions, hooks, custom env, unknown keys) is kept.
+//
+// emptied is true when there is nothing left to write — the caller should
+// delete the file rather than persist `{}`. An empty or missing base is
+// treated as already empty. Invalid JSON is an error and is not rewritten.
+func StripModelKeys(base []byte) (out []byte, emptied bool, err error) {
+	trimmed := bytes.TrimSpace(base)
+	if len(trimmed) == 0 {
+		return nil, true, nil
+	}
+	doc := map[string]json.RawMessage{}
+	if err := json.Unmarshal(trimmed, &doc); err != nil {
+		return nil, false, fmt.Errorf("existing settings.local.json is not a JSON object: %w", err)
+	}
+
+	delete(doc, "model")
+
+	if raw, ok := doc["env"]; ok && len(bytes.TrimSpace(raw)) > 0 {
+		env := map[string]json.RawMessage{}
+		if err := json.Unmarshal(raw, &env); err != nil {
+			return nil, false, fmt.Errorf("existing env is not a JSON object: %w", err)
+		}
+		for k := range env {
+			if IsModelEnvKey(k) {
+				delete(env, k)
+			}
+		}
+		if len(env) == 0 {
+			delete(doc, "env")
+		} else {
+			mergedEnv, err := json.Marshal(env)
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to marshal remaining env: %w", err)
+			}
+			doc["env"] = mergedEnv
+		}
+	} else {
+		delete(doc, "env")
+	}
+
+	if len(doc) == 0 {
+		return nil, true, nil
+	}
+	pretty, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return nil, false, err
+	}
+	return append(pretty, '\n'), false, nil
 }
