@@ -296,6 +296,68 @@ func TestInspectLocalConfigReadsModelAndMCP(t *testing.T) {
 	}
 }
 
+func TestInspectLocalConfigMatchesProviderGroup(t *testing.T) {
+	home := sandboxHome(t)
+	modelsDir := filepath.Join(home, ".cc-switch-cli", "models")
+	if err := os.MkdirAll(modelsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Two store groups plus one that shares the base URL but not the token —
+	// only "group-a" should match.
+	groups := map[string]string{
+		"group-a": `{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-local-token","ANTHROPIC_BASE_URL":"https://api.example.com","ANTHROPIC_MODEL":"claude-sonnet-4-6"}}`,
+		"other":   `{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-other","ANTHROPIC_BASE_URL":"https://api.example.com"}}`,
+	}
+	for name, raw := range groups {
+		if err := os.WriteFile(filepath.Join(modelsDir, name+".json"), []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, ".claude", "settings.local.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := `{
+  "model": "sonnet",
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "sk-local-token",
+    "ANTHROPIC_BASE_URL": "https://api.example.com"
+  }
+}`
+	if err := os.WriteFile(target, []byte(settings), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := InspectLocalConfig(LocalOptions{Path: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.MatchedProviders) != 1 || snap.MatchedProviders[0] != "group-a" {
+		t.Fatalf("matched providers = %v, want [group-a]", snap.MatchedProviders)
+	}
+}
+
+func TestInspectLocalConfigNoMatchingGroup(t *testing.T) {
+	sandboxHome(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, ".claude", "settings.local.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte(`{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-x","ANTHROPIC_BASE_URL":"https://x.example.com"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := InspectLocalConfig(LocalOptions{Path: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.MatchedProviders) != 0 {
+		t.Fatalf("expected no match, got %v", snap.MatchedProviders)
+	}
+}
+
 func sandboxHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

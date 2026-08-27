@@ -72,6 +72,7 @@ func localSettingsStatus(snap *manager.LocalSnapshot) string {
 func printLocalModel(snap *manager.LocalSnapshot) {
 	m := snap.Model
 	printKV("model", dash(m.TopLevelModel()))
+	printKV("group", localGroupDisplay(snap))
 	printKV("env model", dash(m.Env.Model))
 	if haiku := m.Env.DefaultHaikuModel; haiku != "" {
 		printKV("default haiku", haiku)
@@ -90,6 +91,17 @@ func printLocalModel(snap *manager.LocalSnapshot) {
 	}
 	if len(snap.ExtraEnv) > 0 {
 		printKV("extra env", strings.Join(snap.ExtraEnv, ", "))
+	}
+}
+
+func localGroupDisplay(snap *manager.LocalSnapshot) string {
+	switch len(snap.MatchedProviders) {
+	case 0:
+		return ui.Dim("(no matching group)")
+	case 1:
+		return ui.Success(snap.MatchedProviders[0])
+	default:
+		return strings.Join(snap.MatchedProviders, ", ")
 	}
 }
 

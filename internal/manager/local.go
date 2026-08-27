@@ -197,6 +197,9 @@ type LocalSnapshot struct {
 	HasModelOverride bool
 	OtherKeys        []string
 	ExtraEnv         []string
+	// MatchedProviders lists store groups whose credentials match this file's
+	// env block (see matchLocalProviders). Empty when nothing matches.
+	MatchedProviders []string
 
 	ProjectDir     string
 	ProjectMCPPath string
@@ -233,6 +236,8 @@ func InspectLocalConfig(opts LocalOptions) (*LocalSnapshot, error) {
 		}
 		if err := populateSettings(snap, data); err != nil {
 			snap.ParseError = err.Error()
+		} else {
+			snap.MatchedProviders = matchLocalProviders(snap.Model)
 		}
 	}
 
@@ -288,4 +293,46 @@ func populateSettings(snap *LocalSnapshot, data []byte) error {
 		snap.HasModelOverride = true
 	}
 	return nil
+}
+
+// matchLocalProviders scans the cc-switch-cli provider store and returns the
+// group names whose credentials match the given settings env block. A group
+// matches when its base URL and token both equal the file's; when neither side
+// carries a token, equality of the resolved model id is accepted instead.
+// Store read/parse failures are swallowed — grouping is a display aid, not a
+// precondition, so `local show` must not fail over it. Sorted by model.List.
+func matchLocalProviders(m *model.Model) []string {
+	if m == nil {
+		return nil
+	}
+	names, err := model.List()
+	if err != nil {
+		return nil
+	}
+	var matched []string
+	for _, name := range names {
+		p, err := model.LoadByName(name)
+		if err != nil {
+			continue
+		}
+		if sameCredentials(p, m) {
+			matched = append(matched, name)
+		}
+	}
+	return matched
+}
+
+func sameCredentials(a, b *model.Model) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a.BaseURL() != b.BaseURL() {
+		return false
+	}
+	at, bt := a.Token(), b.Token()
+	if at != "" || bt != "" {
+		return at != "" && at == bt
+	}
+	id := a.ResolvedModelID()
+	return id != "" && id == b.ResolvedModelID()
 }
