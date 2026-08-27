@@ -16,8 +16,8 @@ import (
 )
 
 // PrintResults renders a lipgloss table of the test results to w, followed by
-// a full-detail block for every failing check so the error reason is never
-// lost to column truncation.
+// a grouped detail section: one block per provider, identical errors merged,
+// full messages in quiet gray so color marks only the verdicts.
 func PrintResults(w io.Writer, results []Result) {
 	rows := make([][]string, 0, len(results))
 	for _, r := range results {
@@ -43,42 +43,106 @@ func PrintResults(w io.Writer, results []Result) {
 			return lipgloss.NewStyle().Padding(0, 1)
 		})
 	fmt.Fprintln(w, t.Render())
-	fmt.Fprintln(w, Summarize(results))
-
-	width := terminalWidth()
-	for _, block := range failureBlocks(results, width) {
-		fmt.Fprintln(w, block)
-	}
+	fmt.Fprintln(w, SummarizeStyled(results))
+	fmt.Fprintln(w, renderGroups(GroupByProvider(results), terminalWidth()))
 }
 
-// failureBlocks renders one indented block per non-OK check with its full,
-// untruncated error wrapped to the available width:
+// renderGroups draws one block per provider:
 //
-//	  my-model/stream — auth error
-//	    http 401: your credit balance is too low to access this endpoint
-func failureBlocks(results []Result, width int) []string {
-	blocks := make([]string, 0, len(results))
-	for _, r := range results {
-		if r.Status == StatusOK || (r.Error == "" && r.ErrorKind == ErrKindNone) {
-			continue
+//	── mimo ─────────────────────────────
+//	  ✗ stream + tool  auth error · http 402 · 165ms
+//	      Insufficient account balance
+func renderGroups(groups []ProviderGroup, width int) string {
+	var b strings.Builder
+	for gi, g := range groups {
+		if gi > 0 {
+			b.WriteString("\n")
 		}
-		head := fmt.Sprintf("  %s/%s", r.Provider, r.Check)
-		if human := r.ErrorKind.Human(); human != "" {
-			head += ui.Dim(" — "+human)
-		} else {
-			head += ui.Dim(" — check failed")
+		b.WriteString(groupHeader(g.Provider, width))
+		b.WriteString("\n")
+		for _, l := range g.OKs {
+			meta := strings.Join(testNonEmpty(
+				"ttft "+renderDuration(l.TTFT),
+				"latency "+renderDuration(l.Latency),
+				renderHTTPShort(l.HTTPCode),
+			), "  ")
+			line := ui.Success("✓") + " " + l.Check
+			if meta != "" {
+				line += ui.Dim("   " + meta)
+			}
+			b.WriteString("  " + line + "\n")
 		}
-		body := ""
-		if r.Error != "" {
-			wrap := lipgloss.NewStyle().Width(maxInt(width-4, 20)).MarginLeft(4)
-			body = wrap.Render(r.Error)
+		for _, f := range g.Failures {
+			b.WriteString("  " + renderFailureLine(f) + "\n")
+			if msg := strings.TrimSpace(f.Error); msg != "" {
+				wrap := lipgloss.NewStyle().Width(maxInt(width-8, 20)).MarginLeft(6)
+				b.WriteString(ui.Dim(trimTrail(wrap.Render(msg))) + "\n")
+			}
 		}
-		blocks = append(blocks, strings.TrimRight(head+"\n"+ui.Dim(body), " \n"))
 	}
-	if len(blocks) > 0 {
-		blocks = append([]string{""}, blocks...) // blank separator after the table
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// groupHeader renders "── name ─────…" faint, with the name bold and the rule
+// padded to the terminal width. The rule is quiet on purpose: it separates
+// without shouting.
+func groupHeader(name string, width int) string {
+	used := len([]rune(name)) + 4
+	pad := maxInt(width-used, 3)
+	return ui.Dim("── ") + ui.Bold(name) + ui.Dim(" "+strings.Repeat("─", pad))
+}
+
+// renderFailureLine renders a merged failure: red ✗, the merged check names,
+// then the tinted reason and dim context. Only the verdict words carry color.
+func renderFailureLine(f Failure) string {
+	badge := ui.Fail("✗")
+	reasonColor := ui.Fail
+	if f.Status == StatusUnsupported {
+		badge = ui.Warn("~")
+		reasonColor = ui.Warn
 	}
-	return blocks
+	reason := f.Kind.HumanOrTag()
+	parts := []string{strings.Join(f.Checks, " + ")}
+	if f.Kind != ErrKindOther && f.Kind != ErrKindNone {
+		parts = append(parts, reasonColor(reason))
+	} else {
+		parts = append(parts, ui.Dim(reason))
+	}
+	if f.HTTPCode != 0 {
+		parts = append(parts, ui.Dim("http "+itoaHTTP(f.HTTPCode)))
+	}
+	return badge + " " + strings.Join(parts, ui.Dim(" · "))
+}
+
+func testNonEmpty(parts ...string) []string {
+	out := parts[:0]
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" && p != "ttft -" && p != "latency -" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func renderHTTPShort(code int) string {
+	if code == 0 {
+		return ""
+	}
+	return "http " + itoaHTTP(code)
+}
+
+func itoaHTTP(code int) string {
+	return fmt.Sprintf("%d", code)
+}
+
+// trimTrail strips the right-side padding lipgloss adds when wrapping to a
+// fixed width, so rendered blocks carry no trailing whitespace.
+func trimTrail(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight(l, " \t")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Summarize folds the batch into one headline line with per-provider verdicts:

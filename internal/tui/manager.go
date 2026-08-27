@@ -240,11 +240,7 @@ func (m managerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = msg.Width
 		m.viewport.Height = msg.Height - 4
 		if m.mode == modeTestResults && len(m.lastResults) > 0 {
-			m.viewport.SetContent(renderTestResults(
-				tester.Summarize(m.lastResults),
-				renderModelTestResults(m.lastResults),
-				msg.Width,
-			))
+			m.setTestResultsContent()
 		}
 	case operationDoneMsg:
 		m.statusMsg = msg.msg
@@ -280,11 +276,7 @@ func (m managerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.statusMsg = ""
 		m.viewport.GotoTop()
-		m.viewport.SetContent(renderTestResults(
-			tester.Summarize(msg.results),
-			renderModelTestResults(msg.results),
-			m.viewport.Width,
-		))
+		m.setTestResultsContent()
 		return m, m.reloadCmd()
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -451,11 +443,7 @@ func (m managerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.mode = modeTestResults
 			m.viewport.GotoTop()
-			m.viewport.SetContent(renderTestResults(
-				tester.Summarize(m.lastResults),
-				renderModelTestResults(m.lastResults),
-				m.viewport.Width,
-			))
+			m.setTestResultsContent()
 			return m, nil
 		case "r":
 			return m, m.reloadCmd()
@@ -538,6 +526,16 @@ func (m managerModel) reloadCmd() tea.Cmd {
 		st, _ := tester.LoadStatus()
 		return modelsReloadedMsg{items: buildManagerItems(names, current, st), current: current}
 	}
+}
+
+// setTestResultsContent fills the viewport with the grouped result view for
+// the current lastResults batch.
+func (m *managerModel) setTestResultsContent() {
+	m.viewport.SetContent(renderTestGroups(
+		tester.SummarizeStyled(m.lastResults),
+		modelTestGroups(m.lastResults),
+		m.viewport.Width,
+	))
 }
 
 // testCmd runs stream+tool checks against the given names.

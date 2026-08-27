@@ -80,8 +80,8 @@ func TestPrintResultsIncludesFullDetail(t *testing.T) {
 	w := &strings.Builder{}
 	PrintResults(w, results)
 	out := w.String()
-	if !strings.Contains(out, "tested 2 providers") {
-		t.Errorf("missing summary line:\n%s", out)
+	if !strings.Contains(out, "── bad ──") {
+		t.Errorf("missing provider group header:\n%s", out)
 	}
 	// lipgloss wraps detail lines to terminal width; flatten whitespace before
 	// asserting the full untruncated error survived.
@@ -89,7 +89,46 @@ func TestPrintResultsIncludesFullDetail(t *testing.T) {
 	if !strings.Contains(flat, full) {
 		t.Errorf("detail block lost the full untruncated error:\n%s", out)
 	}
-	if !strings.Contains(out, "bad/stream") {
-		t.Errorf("detail block missing provider/check header:\n%s", out)
+	if !strings.Contains(out, "auth error") {
+		t.Errorf("failure line missing tinted reason:\n%s", out)
+	}
+}
+
+func TestGroupByProviderMergesIdenticalFailures(t *testing.T) {
+	same := "http 403: anomalous client"
+	results := []Result{
+		{Provider: "b", Check: "stream", Status: StatusOK, TTFT: 1},
+		{Provider: "a", Check: "stream", Status: StatusFail, Error: same, ErrorKind: ErrKindAuth, HTTPStatus: 403},
+		{Provider: "a", Check: "tool", Status: StatusFail, Error: same, ErrorKind: ErrKindAuth, HTTPStatus: 403},
+		{Provider: "a", Check: "extra", Status: StatusFail, Error: "different", ErrorKind: ErrKindRateLimit},
+	}
+	groups := GroupByProvider(results)
+	if len(groups) != 2 || groups[0].Provider != "a" {
+		t.Fatalf("expected 2 groups sorted by name, got %+v", groups)
+	}
+	g := groups[0]
+	if len(g.Failures) != 2 {
+		t.Fatalf("identical failures should merge, distinct stay separate: %+v", g.Failures)
+	}
+	if strings.Join(g.Failures[0].Checks, ",") != "stream,tool" {
+		t.Errorf("merged checks = %v, want stream,tool", g.Failures[0].Checks)
+	}
+	if g.Worst() != StatusFail {
+		t.Errorf("worst = %q, want fail", g.Worst())
+	}
+	if groups[1].Worst() != StatusOK || len(groups[1].Failures) != 0 {
+		t.Errorf("all-ok group should have no failures: %+v", groups[1])
+	}
+}
+
+func TestSummarizeStyledColorsCounts(t *testing.T) {
+	results := []Result{
+		{Provider: "a", Check: "stream", Status: StatusOK},
+		{Provider: "b", Check: "stream", Status: StatusFail, Error: "down"},
+	}
+	plain := Summarize(results)
+	t.Setenv("NO_COLOR", "1")
+	if got := SummarizeStyled(results); got != plain {
+		t.Errorf("with NO_COLOR, SummarizeStyled = %q, want %q", got, plain)
 	}
 }

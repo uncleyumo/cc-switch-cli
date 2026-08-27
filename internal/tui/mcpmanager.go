@@ -241,11 +241,7 @@ func (m mcpManagerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = msg.Width
 		m.viewport.Height = msg.Height - 4
 		if m.mode == mcpModeTestResults && len(m.lastResults) > 0 {
-			m.viewport.SetContent(renderTestResults(
-				summarizeMCP(m.lastResults),
-				renderMCPTestResults(m.lastResults),
-				msg.Width,
-			))
+			m.setTestResultsContent()
 		}
 	case mcpOpDoneMsg:
 		m.statusMsg = msg.msg
@@ -279,11 +275,7 @@ func (m mcpManagerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.statusMsg = ""
 		m.viewport.GotoTop()
-		m.viewport.SetContent(renderTestResults(
-			summarizeMCP(msg.results),
-			renderMCPTestResults(msg.results),
-			m.viewport.Width,
-		))
+		m.setTestResultsContent()
 		return m, m.reloadCmd()
 	case mcpToolsContentMsg:
 		m.viewport.SetContent(msg.content)
@@ -435,11 +427,7 @@ func (m mcpManagerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.mode = mcpModeTestResults
 			m.viewport.GotoTop()
-			m.viewport.SetContent(renderTestResults(
-				summarizeMCP(m.lastResults),
-				renderMCPTestResults(m.lastResults),
-				m.viewport.Width,
-			))
+			m.setTestResultsContent()
 			return m, nil
 		case "s":
 			m.cycleScopeFilter()
@@ -536,6 +524,16 @@ func runMCPOp(successMsg string, op func() error) tea.Cmd {
 		}
 		return mcpOpDoneMsg{msg: successMsg}
 	}
+}
+
+// setTestResultsContent fills the viewport with the grouped result view for
+// the current lastResults batch.
+func (m *mcpManagerModel) setTestResultsContent() {
+	m.viewport.SetContent(renderTestGroups(
+		summarizeMCPStyled(m.lastResults),
+		mcpTestGroups(m.lastResults),
+		m.viewport.Width,
+	))
 }
 
 func (m mcpManagerModel) reloadCmd() tea.Cmd {

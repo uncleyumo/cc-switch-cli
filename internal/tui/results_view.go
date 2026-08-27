@@ -12,14 +12,25 @@ import (
 	"cc-switch-cli/internal/tester"
 )
 
-// testResultRow is one entry in the shared post-test detail view shown by the
-// model and MCP managers after pressing t / T.
-type testResultRow struct {
-	Title  string // e.g. "my-model / stream" or "[user] github-server"
-	Badge  string // pre-rendered OK / FAIL / OK~ status
-	Meta   string // "ttft 120ms  latency 480ms  http 401" (may be empty)
-	Detail string // full, untruncated error text (may be empty)
+// displayLine is one row inside a group of the results view.
+type displayLine struct {
+	Badge  string // pre-rendered ✓ / ✗ / ~
+	Label  string // "stream" or "stream + tool"
+	Meta   string // dim context: timings, http code, reason
+	Detail string // full error text, quiet gray (may be empty)
 }
+
+// displayGroup is one provider (or MCP server) block.
+type displayGroup struct {
+	Name  string
+	Lines []displayLine
+}
+
+var (
+	groupRule  = lipgloss.NewStyle().Faint(true)
+	groupName  = lipgloss.NewStyle().Bold(true)
+	detailGray = lipgloss.NewStyle().Faint(true)
+)
 
 // contentWidth clamps the usable width for the results view so very narrow or
 // degenerate terminal sizes still produce readable output.
@@ -30,101 +41,182 @@ func contentWidth(width int) int {
 	return width - 2
 }
 
-// renderTestResults renders a summary line plus the rows into fixed-width,
-// pre-wrapped text for a bubbles viewport (which does not reflow horizontally).
-func renderTestResults(summary string, rows []testResultRow, width int) string {
+// renderTestGroups renders a summary line plus one block per provider for a
+// bubbles viewport (which does not reflow horizontally, so everything is
+// pre-wrapped). Color marks only the verdicts; error bodies stay quiet gray.
+func renderTestGroups(summary string, groups []displayGroup, width int) string {
 	wrap := lipgloss.NewStyle().Width(contentWidth(width))
 	var b strings.Builder
 	if summary != "" {
 		b.WriteString(wrap.Render(titleStyle.Render(summary)))
-		b.WriteString("\n\n")
-	}
-	for i, r := range rows {
-		head := r.Badge + " " + titleStyle.Render(r.Title)
-		if r.Meta != "" {
-			head += helpStyle.Render("   " + r.Meta)
-		}
-		b.WriteString(wrap.Render(head))
 		b.WriteString("\n")
-		if strings.TrimSpace(r.Detail) != "" {
-			body := lipgloss.NewStyle().MarginLeft(3).Width(contentWidth(width) - 3).Render(r.Detail)
-			b.WriteString(errorStyle.Render(body))
+	}
+	for _, g := range groups {
+		b.WriteString("\n")
+		b.WriteString(wrap.Render(groupHeader(g.Name, width)))
+		b.WriteString("\n")
+		for _, l := range g.Lines {
+			line := l.Badge + " " + l.Label
+			if strings.TrimSpace(l.Meta) != "" {
+				line += helpStyle.Render("   " + l.Meta)
+			}
+			b.WriteString(wrap.Render("  " + line))
 			b.WriteString("\n")
-		}
-		if i < len(rows)-1 {
-			b.WriteString("\n")
+			if strings.TrimSpace(l.Detail) != "" {
+				body := lipgloss.NewStyle().
+					MarginLeft(6).Width(contentWidth(width) - 6).Render(l.Detail)
+				b.WriteString(detailGray.Render(trimTrail(body)))
+				b.WriteString("\n")
+			}
 		}
 	}
 	return b.String()
 }
 
-// renderModelTestResults converts model-test results into result-view rows.
-func renderModelTestResults(results []tester.Result) []testResultRow {
-	rows := make([]testResultRow, 0, len(results))
-	for _, r := range results {
-		row := testResultRow{
-			Title: fmt.Sprintf("%s / %s", r.Provider, r.Check),
-			Meta: strings.Join(testNonEmpty(
-				fmt.Sprintf("ttft %s", renderDur(r.TTFT)),
-				fmt.Sprintf("latency %s", renderDur(r.Latency)),
-				renderHTTPShort(r.HTTPStatus),
-			), "  "),
-			Detail: r.Error,
-		}
-		switch r.Status {
-		case tester.StatusOK:
-			row.Badge = statusOK("OK")
-		case tester.StatusUnsupported:
-			row.Badge = statusWarn("OK~")
-		default:
-			reason := r.ErrorKind.Human()
-			row.Badge = statusFail("FAIL")
-			if reason == "" && r.Error == "" {
-				reason = "check failed"
-			}
-			if reason != "" {
-				if row.Detail == "" {
-					row.Detail = reason
-				} else if r.ErrorKind != tester.ErrKindOther || !strings.EqualFold(reason, "error") {
-					// Put the classified reason in front of the raw message.
-					row.Detail = reason + ": " + r.Error
-				}
-			}
-		}
-		rows = append(rows, row)
+// groupHeader renders "── name ─────…" with the rule padded to the width. The
+// rule is faint on purpose: it separates groups without shouting.
+func groupHeader(name string, width int) string {
+	used := len([]rune(name)) + 4
+	pad := width - used
+	if pad < 3 {
+		pad = 3
 	}
-	return rows
+	return groupRule.Render("── ") + groupName.Render(name) + groupRule.Render(" "+strings.Repeat("─", pad))
 }
 
-// renderMCPTestResults converts MCP probe results into result-view rows. MCP
-// errors are arbitrary program/HTTP output, so no classification is applied —
-// only the shared renderer is reused.
-func renderMCPTestResults(results []mcptest.Result) []testResultRow {
-	rows := make([]testResultRow, 0, len(results))
-	for _, r := range results {
-		scope := r.Scope
-		if scope != "" {
-			scope = "[" + scope + "] "
+// modelTestGroups converts a model-test batch into grouped display rows using
+// the shared grouping/dedup logic from the tester package.
+func modelTestGroups(results []tester.Result) []displayGroup {
+	groups := make([]displayGroup, 0)
+	for _, g := range tester.GroupByProvider(results) {
+		dg := displayGroup{Name: g.Provider}
+		for _, ok := range g.OKs {
+			dg.Lines = append(dg.Lines, displayLine{
+				Badge: statusOK("✓"),
+				Label: ok.Check,
+				Meta: strings.Join(testNonEmpty(
+					"ttft "+renderDur(ok.TTFT),
+					"latency "+renderDur(ok.Latency),
+					renderHTTPShort(ok.HTTPCode),
+				), "  "),
+			})
 		}
-		row := testResultRow{
-			Title:  scope + r.Name,
+		for _, f := range g.Failures {
+			dg.Lines = append(dg.Lines, failureLine(f))
+		}
+		groups = append(groups, dg)
+	}
+	return groups
+}
+
+// failureLine tints only the verdict glyph and the reason word; timings and
+// the http code ride along dim.
+func failureLine(f tester.Failure) displayLine {
+	badge := statusFail("✗")
+	reasonColor := statusFail
+	if f.Status == tester.StatusUnsupported {
+		badge = statusWarn("~")
+		reasonColor = statusWarn
+	}
+	meta := ""
+	if f.Kind != tester.ErrKindOther && f.Kind != tester.ErrKindNone {
+		meta = reasonColor(f.Kind.HumanOrTag())
+	} else {
+		meta = helpStyle.Render(f.Kind.HumanOrTag())
+	}
+	if f.HTTPCode != 0 {
+		meta += helpStyle.Render(fmt.Sprintf(" · http %d", f.HTTPCode))
+	}
+	if f.Latency > 0 {
+		meta += helpStyle.Render(" · " + renderDur(f.Latency))
+	}
+	return displayLine{
+		Badge:  badge,
+		Label:  strings.Join(f.Checks, " + "),
+		Meta:   meta,
+		Detail: ensureUTF8(f.Error),
+	}
+}
+
+// mcpTestGroups converts an MCP probe batch into one group per server. MCP
+// errors are arbitrary program/HTTP output, so no classification is applied.
+func mcpTestGroups(results []mcptest.Result) []displayGroup {
+	groups := make([]displayGroup, 0, len(results))
+	for _, r := range results {
+		name := r.Name
+		if r.Scope != "" {
+			name = "[" + r.Scope + "] " + r.Name
+		}
+		line := displayLine{
+			Badge:  statusFail("✗"),
+			Label:  r.Transport,
+			Meta:   strings.Join(testNonEmpty(mcpLatency(r), renderToolCount(r.ToolCount)), "  "),
 			Detail: ensureUTF8(r.Error),
-			Meta: strings.Join(testNonEmpty(
-				mcpLatency(r),
-				renderToolCount(r.ToolCount),
-			), "  "),
 		}
 		switch r.Status {
 		case mcptest.StatusOK:
-			row.Badge = statusOK("OK")
+			line.Badge = statusOK("✓")
 		case mcptest.StatusUnsupported:
-			row.Badge = statusWarn("N/A")
-		default:
-			row.Badge = statusFail("FAIL")
+			line.Badge = statusWarn("~")
 		}
-		rows = append(rows, row)
+		groups = append(groups, displayGroup{Name: name, Lines: []displayLine{line}})
 	}
-	return rows
+	return groups
+}
+
+// summarizeMCPStyled folds a probe batch into a headline with tinted counts.
+func summarizeMCPStyled(results []mcptest.Result) string {
+	if len(results) == 0 {
+		return "no results"
+	}
+	ok := 0
+	fail := 0
+	unavailable := 0
+	for _, r := range results {
+		switch r.Status {
+		case mcptest.StatusOK:
+			ok++
+		case mcptest.StatusFail:
+			fail++
+		default:
+			unavailable++
+		}
+	}
+	var parts []string
+	if ok > 0 {
+		parts = append(parts, statusOK(fmt.Sprintf("%d ok", ok)))
+	}
+	if fail > 0 {
+		parts = append(parts, statusFail(fmt.Sprintf("%d fail", fail)))
+	}
+	if unavailable > 0 {
+		parts = append(parts, statusWarn(fmt.Sprintf("%d n/a", unavailable)))
+	}
+	return fmt.Sprintf("tested %d servers: %s", len(results), strings.Join(parts, ", "))
+}
+
+func testNonEmpty(parts ...string) []string {
+	out := parts[:0]
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" && p != "ttft -" && p != "latency -" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func renderDur(d time.Duration) string {
+	if d <= 0 {
+		return "-"
+	}
+	return d.Round(time.Millisecond).String()
+}
+
+func renderHTTPShort(code int) string {
+	if code == 0 {
+		return ""
+	}
+	return fmt.Sprintf("http %d", code)
 }
 
 func mcpLatency(r mcptest.Result) string {
@@ -144,60 +236,14 @@ func renderToolCount(n int) string {
 	return fmt.Sprintf("%d tools", n)
 }
 
-// summarizeMCP folds a probe batch into one headline line:
-// "tested 4 servers: 3 ok, 1 fail".
-func summarizeMCP(results []mcptest.Result) string {
-	if len(results) == 0 {
-		return "no results"
+// trimTrail strips the right-side padding lipgloss adds when wrapping to a
+// fixed width, so rendered blocks carry no trailing whitespace.
+func trimTrail(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight(l, " \t")
 	}
-	ok := 0
-	fail := 0
-	unavailable := 0
-	for _, r := range results {
-		switch r.Status {
-		case mcptest.StatusOK:
-			ok++
-		case mcptest.StatusFail:
-			fail++
-		default:
-			unavailable++
-		}
-	}
-	var parts []string
-	if ok > 0 {
-		parts = append(parts, fmt.Sprintf("%d ok", ok))
-	}
-	if fail > 0 {
-		parts = append(parts, fmt.Sprintf("%d fail", fail))
-	}
-	if unavailable > 0 {
-		parts = append(parts, fmt.Sprintf("%d n/a", unavailable))
-	}
-	return fmt.Sprintf("tested %d servers: %s", len(results), strings.Join(parts, ", "))
-}
-
-func testNonEmpty(parts ...string) []string {
-	out := parts[:0]
-	for _, p := range parts {
-		if strings.TrimSpace(p) != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-func renderDur(d time.Duration) string {
-	if d <= 0 {
-		return "-"
-	}
-	return d.Round(time.Millisecond).String()
-}
-
-func renderHTTPShort(code int) string {
-	if code == 0 {
-		return ""
-	}
-	return fmt.Sprintf("http %d", code)
+	return strings.Join(lines, "\n")
 }
 
 // ensureUTF8 normalizes probe output for the results view: CRLF (typical of

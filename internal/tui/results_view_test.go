@@ -10,13 +10,17 @@ import (
 	"cc-switch-cli/internal/tester"
 )
 
-func TestRenderTestResultsWrapsAndStaysUTF8(t *testing.T) {
+func TestRenderTestGroupsWrapsAndStaysUTF8(t *testing.T) {
 	longErr := strings.Repeat("测试错误信息，用于验证换行与 UTF-8 安全。", 30)
-	rows := []testResultRow{
-		{Title: "good / stream", Badge: statusOK("OK"), Meta: "ttft 120ms"},
-		{Title: "bad / stream", Badge: statusFail("FAIL"), Meta: "http 401", Detail: longErr},
+	groups := []displayGroup{
+		{Name: "good", Lines: []displayLine{
+			{Badge: statusOK("✓"), Label: "stream", Meta: "ttft 120ms"},
+		}},
+		{Name: "bad", Lines: []displayLine{
+			{Badge: statusFail("✗"), Label: "stream + tool", Meta: "auth error · http 401", Detail: longErr},
+		}},
 	}
-	out := renderTestResults("tested 2 providers: 1 ok, 1 fail", rows, 50)
+	out := renderTestGroups("tested 2 providers: 1 ok, 1 fail", groups, 50)
 	if !utf8.ValidString(out) {
 		t.Fatal("results view produced invalid UTF-8")
 	}
@@ -25,16 +29,24 @@ func TestRenderTestResultsWrapsAndStaysUTF8(t *testing.T) {
 			t.Errorf("line %d overflows width: %d > %d (%q)", i, w, contentWidth(50), line)
 		}
 	}
-	if !strings.Contains(out, "good / stream") || !strings.Contains(out, "bad / stream") {
-		t.Errorf("row titles missing:\n%s", out)
+	if !strings.Contains(out, "── good") || !strings.Contains(out, "── bad") {
+		t.Errorf("group headers missing:\n%s", out)
+	}
+	if !strings.Contains(out, "stream + tool") {
+		t.Errorf("merged failure label missing:\n%s", out)
 	}
 }
 
-func TestRenderTestResultsNarrowFloor(t *testing.T) {
-	rows := []testResultRow{{Title: "x / stream", Badge: statusFail("FAIL"), Detail: "boom"}}
-	out := renderTestResults("", rows, 10)
+func TestRenderTestGroupsNarrowFloor(t *testing.T) {
+	groups := []displayGroup{{Name: "x", Lines: []displayLine{
+		{Badge: statusFail("✗"), Label: "stream", Detail: "boom"},
+	}}}
+	out := renderTestGroups("", groups, 10)
 	if !strings.Contains(out, "boom") {
 		t.Errorf("detail missing in ultra-narrow render:\n%s", out)
+	}
+	if !strings.Contains(out, "── x") {
+		t.Errorf("group header missing in narrow render:\n%s", out)
 	}
 }
 
@@ -65,44 +77,84 @@ func visibleWidth(s string) int {
 	return len([]rune(b.String()))
 }
 
-func TestRenderModelTestResults(t *testing.T) {
+func TestModelTestGroups(t *testing.T) {
 	results := []tester.Result{
 		{Provider: "a", Check: "stream", Status: tester.StatusOK,
-			TTFT: 120 * time.Millisecond, Latency: 480 * time.Millisecond},
+			TTFT: 120 * time.Millisecond, Latency: 480 * time.Millisecond, HTTPStatus: 200},
 		{Provider: "b", Check: "stream", Status: tester.StatusFail,
 			ErrorKind: tester.ErrKindAuth, Error: "http 401: bad key", HTTPStatus: 401},
+		{Provider: "b", Check: "tool", Status: tester.StatusFail,
+			ErrorKind: tester.ErrKindAuth, Error: "http 401: bad key", HTTPStatus: 401},
 	}
-	rows := renderModelTestResults(results)
-	if len(rows) != 2 {
-		t.Fatalf("expected 2 rows, got %d", len(rows))
+	groups := modelTestGroups(results)
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
 	}
-	if !strings.Contains(rows[0].Meta, "ttft 120ms") || !strings.Contains(rows[0].Meta, "latency 480ms") {
-		t.Errorf("ok row meta incomplete: %q", rows[0].Meta)
+	b := groups[1]
+	if len(b.Lines) != 1 {
+		t.Fatalf("identical stream+tool failures should merge into one line, got %d", len(b.Lines))
 	}
-	if !strings.Contains(rows[0].Badge, "OK") {
-		t.Errorf("ok row badge wrong: %q", rows[0].Badge)
+	line := b.Lines[0]
+	if line.Label != "stream + tool" {
+		t.Errorf("merged label = %q", line.Label)
 	}
-	if rows[1].Detail != "auth error: http 401: bad key" {
-		t.Errorf("fail row should prefix the classified reason, got %q", rows[1].Detail)
+	if !strings.Contains(line.Meta, "auth error") || !strings.Contains(line.Meta, "http 401") {
+		t.Errorf("failure meta missing reason/http: %q", line.Meta)
 	}
-	if !strings.Contains(rows[1].Meta, "http 401") {
-		t.Errorf("fail row meta missing http code: %q", rows[1].Meta)
+	if !strings.Contains(line.Detail, "bad key") {
+		t.Errorf("failure detail lost message: %q", line.Detail)
+	}
+	okLine := groups[0].Lines[0]
+	if !strings.Contains(okLine.Meta, "ttft 120ms") || !strings.Contains(okLine.Meta, "http 200") {
+		t.Errorf("ok line meta incomplete: %q", okLine.Meta)
 	}
 }
 
-func TestRenderMCPTestResults(t *testing.T) {
+func TestMCPTestGroups(t *testing.T) {
 	results := []mcptest.Result{
-		{Name: "gh", Scope: "user", Status: mcptest.StatusOK, ToolCount: 8, LatencyMS: 340},
-		{Name: "bad", Scope: "project", Status: mcptest.StatusFail, Error: "stdio: exit code 1\r\n boom"},
+		{Name: "gh", Scope: "user", Status: mcptest.StatusOK, Transport: "stdio",
+			ToolCount: 8, LatencyMS: 340},
+		{Name: "bad", Scope: "project", Status: mcptest.StatusFail, Transport: "http",
+			Error: "stdio: exit code 1\r\n boom"},
 	}
-	rows := renderMCPTestResults(results)
-	if len(rows) != 2 {
-		t.Fatalf("expected 2 rows, got %d", len(rows))
+	groups := mcpTestGroups(results)
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
 	}
-	if rows[0].Title != "[user] gh" || !strings.Contains(rows[0].Meta, "8 tools") {
-		t.Errorf("ok row mismatch: %+v", rows[0])
+	if groups[0].Name != "[user] gh" || !strings.Contains(groups[0].Lines[0].Meta, "8 tools") {
+		t.Errorf("ok group mismatch: %+v", groups[0])
 	}
-	if rows[1].Detail != "stdio: exit code 1\n boom" { // \r stripped
-		t.Errorf("error text not sanitized: %q", rows[1].Detail)
+	if !strings.Contains(groups[1].Lines[0].Detail, "exit code 1\n boom") { // \r stripped
+		t.Errorf("error text not sanitized: %q", groups[1].Lines[0].Detail)
 	}
+}
+
+func TestSummarizeMCPStyled(t *testing.T) {
+	results := []mcptest.Result{
+		{Status: mcptest.StatusOK},
+		{Status: mcptest.StatusFail},
+		{Status: mcptest.StatusUnsupported},
+	}
+	got := summarizeMCPStyled(results)
+	plain := visiblePlain(got)
+	if !strings.Contains(plain, "tested 3 servers: 1 ok, 1 fail, 1 n/a") {
+		t.Errorf("summarizeMCPStyled plain = %q", plain)
+	}
+}
+
+// visiblePlain strips ANSI codes for assertion readability.
+func visiblePlain(s string) string {
+	var b strings.Builder
+	inEscape := false
+	for _, r := range s {
+		switch {
+		case r == '\x1b':
+			inEscape = true
+		case inEscape && r == 'm':
+			inEscape = false
+		case !inEscape:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
