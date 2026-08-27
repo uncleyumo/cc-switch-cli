@@ -32,6 +32,14 @@ func TestRenderTestGroupsWrapsAndStaysUTF8(t *testing.T) {
 	if !strings.Contains(out, "── good") || !strings.Contains(out, "── bad") {
 		t.Errorf("group headers missing:\n%s", out)
 	}
+	// The header rule must stay on the same line as the name; a line made up
+	// only of ─ means the rule wrapped and now reads as the previous group's
+	// bottom border.
+	for i, line := range strings.Split(out, "\n") {
+		if line != "" && strings.Trim(line, "─") == "" {
+			t.Errorf("line %d is a bare rule (header wrapped):\n%s", i, out)
+		}
+	}
 	if !strings.Contains(out, "stream + tool") {
 		t.Errorf("merged failure label missing:\n%s", out)
 	}

@@ -42,10 +42,8 @@ type managerItem struct {
 }
 
 func (m managerItem) Title() string {
-	prefix := "  "
 	name := m.name
 	if m.active {
-		prefix = activeStyle.Render("● ")
 		name = activeStyle.Render(name)
 	}
 	suffix := ""
@@ -61,14 +59,14 @@ func (m managerItem) Title() string {
 		}
 		suffix = "  " + s
 	}
-	return prefix + name + suffix
+	return name + suffix
 }
 func (m managerItem) Description() string { return m.statusDescription() }
 
 // statusDescription renders the cached last-test line plus a short reason when
 // the last test did not pass, so failures are never unexplained.
 func (m managerItem) statusDescription() string {
-	parts := testNonEmpty(m.tokenDim)
+	parts := testNonEmpty(helpStyle.Render(m.tokenDim))
 	if m.status != nil && m.status.Status != tester.StatusOK {
 		if human := m.status.ErrorKind.Human(); human != "" {
 			parts = append(parts, statusFail(human))
@@ -83,18 +81,24 @@ func (m managerItem) FilterValue() string { return m.name }
 type managerDelegate struct{}
 
 func (managerDelegate) Height() int                             { return 2 }
-func (managerDelegate) Spacing() int                            { return 0 }
+func (managerDelegate) Spacing() int                            { return 1 }
 func (managerDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+
+// Render keeps every name on a shared 2-column gutter (● current, › selected)
+// and indents the description to match, so each item reads as one block.
 func (managerDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	it, ok := item.(managerItem)
 	if !ok {
 		return
 	}
-	first := it.Title()
-	second := it.Description()
+	cursor := "  "
 	if index == m.Index() {
-		first = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true).Render("› " + strings.TrimLeft(first, " ●"))
+		cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true).Render("› ")
+	} else if it.active {
+		cursor = activeStyle.Render("● ")
 	}
+	first := cursor + it.Title()
+	second := "  " + it.Description()
 	fmt.Fprintf(w, "%s\n%s", first, second)
 }
 

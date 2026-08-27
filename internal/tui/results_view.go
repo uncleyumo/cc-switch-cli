@@ -73,11 +73,14 @@ func renderTestGroups(summary string, groups []displayGroup, width int) string {
 	return b.String()
 }
 
-// groupHeader renders "── name ─────…" with the rule padded to the width. The
-// rule is faint on purpose: it separates groups without shouting.
+// groupHeader renders "── name ─────…" with the rule padded to the content
+// width (not the raw terminal width — renderTestGroups wraps at the narrower
+// content width, and an overlong header would spill the rule onto its own
+// line, where it reads as the previous group's bottom border). The rule is
+// faint on purpose: it separates groups without shouting.
 func groupHeader(name string, width int) string {
 	used := len([]rune(name)) + 4
-	pad := width - used
+	pad := contentWidth(width) - used
 	if pad < 3 {
 		pad = 3
 	}

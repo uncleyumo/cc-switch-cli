@@ -68,7 +68,7 @@ func (m mcpItem) FilterValue() string {
 type mcpDelegate struct{}
 
 func (mcpDelegate) Height() int                             { return 2 }
-func (mcpDelegate) Spacing() int                            { return 0 }
+func (mcpDelegate) Spacing() int                            { return 1 }
 func (mcpDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 func (mcpDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	it, ok := item.(mcpItem)
