@@ -30,6 +30,7 @@ const (
 	modeTesting
 	modeAdd
 	modeRename
+	modeTestResults
 )
 
 // managerItem is the row shown in the model manager list.
@@ -62,7 +63,21 @@ func (m managerItem) Title() string {
 	}
 	return prefix + name + suffix
 }
-func (m managerItem) Description() string { return m.tokenDim }
+func (m managerItem) Description() string { return m.statusDescription() }
+
+// statusDescription renders the cached last-test line plus a short reason when
+// the last test did not pass, so failures are never unexplained.
+func (m managerItem) statusDescription() string {
+	parts := testNonEmpty(m.tokenDim)
+	if m.status != nil && m.status.Status != tester.StatusOK {
+		if human := m.status.ErrorKind.Human(); human != "" {
+			parts = append(parts, statusFail(human))
+		} else if m.status.Error != "" {
+			parts = append(parts, statusFail(tester.ErrKindOther.HumanOrTag()))
+		}
+	}
+	return strings.Join(parts, " · ")
+}
 func (m managerItem) FilterValue() string { return m.name }
 
 type managerDelegate struct{}
@@ -76,7 +91,7 @@ func (managerDelegate) Render(w io.Writer, m list.Model, index int, item list.It
 		return
 	}
 	first := it.Title()
-	second := helpStyle.Render(it.tokenDim)
+	second := it.Description()
 	if index == m.Index() {
 		first = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true).Render("› " + strings.TrimLeft(first, " ●"))
 	}
@@ -98,8 +113,9 @@ type managerModel struct {
 	err         error
 	testTotal   int
 	testDone    int
-	editHint    string // pre-populated by RunManager after returning from editor
-	editRequest string // set when the user pressed `e` and we need to launch the editor
+	lastResults []tester.Result // most recent batch, so it can be reopened with R
+	editHint    string          // pre-populated by RunManager after returning from editor
+	editRequest string          // set when the user pressed `e` and we need to launch the editor
 }
 
 // operationDoneMsg fires from tea.Cmd wrappers around blocking manager calls.
@@ -223,6 +239,13 @@ func (m managerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.SetSize(msg.Width, msg.Height-2)
 		m.viewport.Width = msg.Width
 		m.viewport.Height = msg.Height - 4
+		if m.mode == modeTestResults && len(m.lastResults) > 0 {
+			m.viewport.SetContent(renderTestResults(
+				tester.Summarize(m.lastResults),
+				renderModelTestResults(m.lastResults),
+				msg.Width,
+			))
+		}
 	case operationDoneMsg:
 		m.statusMsg = msg.msg
 		m.err = msg.err
@@ -238,8 +261,8 @@ func (m managerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.testDone = msg.done
 		m.testTotal = msg.total
 	case testResultsMsg:
-		m.mode = modeList
 		if msg.err != nil {
+			m.mode = modeList
 			m.err = msg.err
 			return m, nil
 		}
@@ -250,6 +273,18 @@ func (m managerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		st.Upsert(msg.results)
 		_ = tester.SaveStatus(st)
+		// Show the full results — errors included — instead of dropping the
+		// user back on a bare list with no explanation of a FAIL.
+		m.mode = modeTestResults
+		m.lastResults = msg.results
+		m.err = nil
+		m.statusMsg = ""
+		m.viewport.GotoTop()
+		m.viewport.SetContent(renderTestResults(
+			tester.Summarize(msg.results),
+			renderModelTestResults(msg.results),
+			m.viewport.Width,
+		))
 		return m, m.reloadCmd()
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -265,6 +300,15 @@ func (m managerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case modeView:
 			switch msg.String() {
 			case "esc", "q", "v", "space":
+				m.mode = modeList
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case modeTestResults:
+			switch msg.String() {
+			case "esc", "q", "space":
 				m.mode = modeList
 				return m, nil
 			}
@@ -401,6 +445,18 @@ func (m managerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.mode = modeTesting
 			return m, m.testCmd(names)
+		case "R":
+			if len(m.lastResults) == 0 {
+				return m, nil
+			}
+			m.mode = modeTestResults
+			m.viewport.GotoTop()
+			m.viewport.SetContent(renderTestResults(
+				tester.Summarize(m.lastResults),
+				renderModelTestResults(m.lastResults),
+				m.viewport.Width,
+			))
+			return m, nil
 		case "r":
 			return m, m.reloadCmd()
 		}
@@ -417,6 +473,8 @@ func (m managerModel) View() string {
 		footer = errorStyle.Render(fmt.Sprintf("delete %q? y/n", selectedName(m)))
 	case modeTesting:
 		footer = m.spinner.View() + " " + fmt.Sprintf("testing %d/%d", m.testDone, m.testTotal)
+	case modeTestResults:
+		return m.viewport.View() + "\n" + helpStyle.Render("esc/q: back • j/k, arrows, pgup/pgdn: scroll")
 	case modeView:
 		return m.viewport.View() + "\n" + helpStyle.Render("esc/v/space to return")
 	case modeAdd, modeRename:
@@ -425,7 +483,7 @@ func (m managerModel) View() string {
 			m.input.View() + "\n" +
 			helpStyle.Render("enter: confirm  •  esc: cancel")
 	default:
-		hints := "enter/u: use  •  a: add  •  n: rename  •  e: edit  •  t: test  •  T: all  •  v: view  •  d: delete  •  r: refresh  •  q: quit"
+		hints := "enter/u: use  •  a: add  •  n: rename  •  e: edit  •  t: test  •  T: all  •  R: last results  •  v: view  •  d: delete  •  r: refresh  •  q: quit"
 		footer = helpStyle.Render(hints)
 	}
 	body := m.list.View()

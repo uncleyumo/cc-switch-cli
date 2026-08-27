@@ -88,6 +88,7 @@ func (sf *StatusFile) Upsert(results []Result) {
 		ttft := time.Duration(0)
 		httpCode := 0
 		errMsg := ""
+		errKind := ErrKindNone
 		checks := ""
 		for _, r := range rs {
 			if r.Latency > latency {
@@ -101,6 +102,7 @@ func (sf *StatusFile) Upsert(results []Result) {
 			}
 			if errMsg == "" && r.Status != StatusOK && r.Error != "" {
 				errMsg = r.Error
+				errKind = r.ErrorKind
 			}
 			if checks == "" {
 				checks = r.Check
@@ -115,6 +117,7 @@ func (sf *StatusFile) Upsert(results []Result) {
 			TTFTMS:    ttft.Milliseconds(),
 			HTTPCode:  httpCode,
 			Error:     errMsg,
+			ErrorKind: errKind,
 			TestedAt:  now,
 		}
 	}

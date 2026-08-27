@@ -59,7 +59,9 @@ func (c *Client) doMessages(ctx context.Context, m *model.Model, body any, force
 }
 
 // callAndStream is a helper that runs a single stream over the SSE parser.
-// It returns (ttft, status, error) and handles auth fallback on 401/403.
+// It returns (ttft, status, error) and handles auth fallback on 401/403: when
+// auto mode retries with x-api-key, the returned error describes only the last
+// attempt.
 func (c *Client) callAndStream(ctx context.Context, m *model.Model, body any, onEvent func(ev sseEvent) (done bool, err error)) (int, time.Duration, error) {
 	start := time.Now()
 	resp, err := c.doMessages(ctx, m, body, "")
@@ -74,8 +76,12 @@ func (c *Client) callAndStream(ctx context.Context, m *model.Model, body any, on
 	defer resp.Body.Close()
 
 	if resp.StatusCode/100 != 2 {
-		body := readErrorBody(resp.Body)
-		return resp.StatusCode, 0, fmt.Errorf("http %d: %s", resp.StatusCode, extractErrMsg(body))
+		raw := readErrorBody(resp.Body)
+		return resp.StatusCode, 0, &ProbeError{
+			HTTPStatus: resp.StatusCode,
+			APIType:    extractErrType(raw),
+			Message:    fmt.Sprintf("http %d: %s", resp.StatusCode, extractErrMsg(raw)),
+		}
 	}
 
 	first := time.Time{}
@@ -117,19 +123,50 @@ func extractErrMsg(body string) string {
 	if msg := jsonErrMsg(body); msg != "" {
 		return clipMsg(msg)
 	}
-	if strings.Contains(body, "data:") {
-		for _, line := range strings.Split(body, "\n") {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(line, "data:") {
-				continue
-			}
-			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if msg := jsonErrMsg(payload); msg != "" {
-				return clipMsg(msg)
-			}
+	for _, payload := range sseDataPayloads(body) {
+		if msg := jsonErrMsg(payload); msg != "" {
+			return clipMsg(msg)
 		}
 	}
 	return clipMsg(body)
+}
+
+// extractErrType mirrors extractErrMsg but pulls the Anthropic error.type out
+// of the same three shapes: {"error":{"type":…}}, a top-level {"type":…} inside
+// an error event, and SSE-wrapped data lines. Returns "" when absent.
+func extractErrType(body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ""
+	}
+	if typ := jsonErrType(body); typ != "" {
+		return typ
+	}
+	for _, payload := range sseDataPayloads(body) {
+		if typ := jsonErrType(payload); typ != "" {
+			return typ
+		}
+	}
+	return ""
+}
+
+// sseDataPayloads returns the JSON payloads embedded in `data:` lines, if any.
+func sseDataPayloads(body string) []string {
+	if !strings.Contains(body, "data:") {
+		return nil
+	}
+	var payloads []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload != "" && payload != "[DONE]" {
+			payloads = append(payloads, payload)
+		}
+	}
+	return payloads
 }
 
 // jsonErrMsg extracts a message from a single JSON object, accepting either
@@ -154,9 +191,39 @@ func jsonErrMsg(s string) string {
 	return wrap.Message
 }
 
+// jsonErrType extracts an error type from a single JSON object, accepting the
+// wire shape {"type":"error","error":{"type":…}} or a bare {"type":…}.
+func jsonErrType(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || s[0] != '{' {
+		return ""
+	}
+	var wrap struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(s), &wrap); err != nil {
+		return ""
+	}
+	if wrap.Error.Type != "" {
+		return wrap.Error.Type
+	}
+	// A top-level {"type":"error"} only marks an SSE envelope, not the cause;
+	// keep looking for the nested value instead of reporting it as one.
+	if wrap.Type == "error" {
+		return ""
+	}
+	return wrap.Type
+}
+
+// clipMsg clips a provider error message to a fixed rune budget so it stays
+// valid UTF-8 even when the source text is CJK or otherwise multi-byte.
 func clipMsg(s string) string {
-	if len(s) > 500 {
-		return s[:500] + "…"
+	r := []rune(s)
+	if len(r) > 500 {
+		return string(r[:500]) + "…"
 	}
 	return s
 }

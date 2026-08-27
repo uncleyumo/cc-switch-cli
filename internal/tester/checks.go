@@ -22,7 +22,8 @@ func (c *Client) runStream(parent context.Context, name string, m *model.Model) 
 
 	modelID := m.WireModelID()
 	if modelID == "" {
-		return Result{Provider: name, Check: checkNameStream, Status: StatusFail, Error: "no model id could be resolved from this config"}
+		return Result{Provider: name, Check: checkNameStream, Status: StatusFail,
+			ErrorKind: ErrKindOther, Error: "no model id could be resolved from this config"}
 	}
 
 	got := struct {
@@ -44,7 +45,7 @@ func (c *Client) runStream(parent context.Context, name string, m *model.Model) 
 			return true, nil
 		case "error":
 			if ev.Error != nil {
-				return true, errors.New(ev.Error.Message)
+				return true, &ProbeError{APIType: ev.Error.Type, Message: ev.Error.Message}
 			}
 			return true, errors.New("provider returned error event")
 		}
@@ -54,6 +55,7 @@ func (c *Client) runStream(parent context.Context, name string, m *model.Model) 
 	res := Result{Provider: name, Check: checkNameStream, HTTPStatus: status, TTFT: ttft, Latency: latency}
 	if err != nil {
 		res.Status = StatusFail
+		res.ErrorKind = errorKind(status, err)
 		res.Error = ui.ScrubTokens(err.Error(), m.Token())
 		return res
 	}
@@ -76,7 +78,8 @@ func (c *Client) runTool(parent context.Context, name string, m *model.Model) Re
 
 	modelID := m.WireModelID()
 	if modelID == "" {
-		return Result{Provider: name, Check: checkNameTool, Status: StatusFail, Error: "no model id could be resolved from this config"}
+		return Result{Provider: name, Check: checkNameTool, Status: StatusFail,
+			ErrorKind: ErrKindOther, Error: "no model id could be resolved from this config"}
 	}
 
 	sawToolUse := false
@@ -97,7 +100,7 @@ func (c *Client) runTool(parent context.Context, name string, m *model.Model) Re
 			return true, nil
 		case "error":
 			if ev.Error != nil {
-				return true, errors.New(ev.Error.Message)
+				return true, &ProbeError{APIType: ev.Error.Type, Message: ev.Error.Message}
 			}
 			return true, errors.New("provider returned error event")
 		}
@@ -107,6 +110,7 @@ func (c *Client) runTool(parent context.Context, name string, m *model.Model) Re
 	res := Result{Provider: name, Check: checkNameTool, HTTPStatus: status, TTFT: ttft, Latency: latency}
 	if err != nil {
 		res.Status = classifyToolError(status)
+		res.ErrorKind = errorKind(status, err)
 		res.Error = ui.ScrubTokens(err.Error(), m.Token())
 		return res
 	}

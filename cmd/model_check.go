@@ -22,12 +22,38 @@ var (
 	modelTestTimeout     time.Duration
 	modelTestConcurrency int
 	modelTestAuth        string
+	modelTestStrict      bool
 )
+
+// errModelTestFailed is a sentinel returned from RunE so main maps it to exit
+// code 1; SilenceErrors suppresses the redundant echo after the table and the
+// detail blocks have already explained every failure.
+var errModelTestFailed = errors.New("one or more checks failed")
+
+// shouldExitNonZero decides the command's exit code. Any FAIL verdict fails
+// the run; UNSUPPORTED only counts when --strict was passed, since it usually
+// means a missing capability rather than an outage.
+func shouldExitNonZero(results []tester.Result, strict bool) bool {
+	for _, r := range results {
+		switch r.Status {
+		case tester.StatusFail:
+			return true
+		case tester.StatusUnsupported:
+			if strict {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 var modelTestCmd = &cobra.Command{
 	Use:   "test [model...]",
 	Short: "Run availability checks against one or more models",
-	Long:  "Runs Anthropic streaming and/or tool-call checks against each named provider. Without arguments, tests every model.\n\nWarning: this issues real API calls against each provider's endpoint and may incur a tiny cost.",
+	Long: "Runs Anthropic streaming and/or tool-call checks against each named provider. Without arguments, tests every model.\n\n" +
+		"Failed checks are classified (auth, rate limit, timeout, network, ...) and the full error is printed below the table.\n\n" +
+		"Exit status: 1 when any check fails; with --strict, an UNSUPPORTED verdict also fails.\n\n" +
+		"Warning: this issues real API calls against each provider's endpoint and may incur a tiny cost.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		checks := tester.Check(0)
 		if modelTestStream {
@@ -91,6 +117,10 @@ var modelTestCmd = &cobra.Command{
 		if err := tester.SaveStatus(status); err != nil {
 			fmt.Fprintln(os.Stderr, ui.Warn("warning: failed to persist test status: "+err.Error()))
 		}
+		if shouldExitNonZero(results, modelTestStrict) {
+			cmd.SilenceErrors = true
+			return errModelTestFailed
+		}
 		return nil
 	},
 }
@@ -114,4 +144,5 @@ func init() {
 	modelTestCmd.Flags().DurationVar(&modelTestTimeout, "timeout", 30*time.Second, "Per-provider timeout")
 	modelTestCmd.Flags().IntVar(&modelTestConcurrency, "concurrency", 4, "Maximum concurrent providers under test")
 	modelTestCmd.Flags().StringVar(&modelTestAuth, "auth", "auto", "Auth header mode: auto, bearer or x-api-key")
+	modelTestCmd.Flags().BoolVar(&modelTestStrict, "strict", false, "Also fail on UNSUPPORTED verdicts (for CI)")
 }

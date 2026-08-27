@@ -1,6 +1,10 @@
 package tester
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
 
 func TestJoinURL(t *testing.T) {
 	cases := []struct {
@@ -55,5 +59,44 @@ func TestExtractErrMsgSSEWrappedError(t *testing.T) {
 	body := "event:error\ndata:{\"error\":{\"message\":\"Insufficient account balance\",\"type\":\"insufficient_balance\"}}\n\n"
 	if got := extractErrMsg(body); got != "Insufficient account balance" {
 		t.Fatalf("wanted wrapped error message from SSE, got %q", got)
+	}
+}
+
+func TestExtractErrType(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"nested wire shape", `{"type":"error","error":{"type":"authentication_error","message":"bad key"}}`, "authentication_error"},
+		{"bare nested only", `{"error":{"type":"insufficient_balance","message":"low"}}`, "insufficient_balance"},
+		{"top-level type", `{"type":"not_found_error"}`, "not_found_error"},
+		{"sse wrapped", "event:error\ndata:{\"error\":{\"type\":\"rate_limit_error\",\"message\":\"slow down\"}}\n\n", "rate_limit_error"},
+		{"sse generic message payload has no type", "event:error\r\ndata:{\"code\":\"InvalidParameter\",\"message\":\"Model not exist.\"}\r\n\r\n", ""},
+		{"missing entirely", "plain text body", ""},
+		{"empty", "", ""},
+		// A bare {"type":"error"} is an SSE envelope marker, not a cause.
+		{"envelope marker ignored", `{"type":"error"}`, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := extractErrType(c.body); got != c.want {
+				t.Errorf("extractErrType(%q) = %q, want %q", c.body, got, c.want)
+			}
+		})
+	}
+}
+
+func TestClipMsgRuneSafe(t *testing.T) {
+	// 600 CJK runes must survive clipping as valid UTF-8 (previously the
+	// byte slice could tear a multi-byte rune in half).
+	long := strings.Repeat("模", 600)
+	got := clipMsg(long)
+	if !utf8.ValidString(got) {
+		t.Fatal("clipMsg produced invalid UTF-8 for multi-byte input")
+	}
+	wantLen := len([]rune("模")) * 501 // 500 runes + ellipsis
+	if len([]rune(got)) != wantLen {
+		t.Errorf("clipMsg rune count = %d, want %d", len([]rune(got)), wantLen)
 	}
 }

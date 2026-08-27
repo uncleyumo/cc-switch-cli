@@ -164,3 +164,108 @@ data: {"type":"message_stop"}`,
 		}
 	}
 }
+
+func TestClientHTTPFailClassifiesKind(t *testing.T) {
+	cases := []struct {
+		name     string
+		body     string
+		status   int
+		wantKind ErrorKind
+	}{
+		{"401 anthropic shape", `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key tok-shouldnotleak-1234"}}`, http.StatusUnauthorized, ErrKindAuth},
+		{"429", `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`, http.StatusTooManyRequests, ErrKindRateLimit},
+		{"500 plain", "boom", http.StatusInternalServerError, ErrKindServerError},
+		{"504", "gateway timeout", http.StatusGatewayTimeout, ErrKindTimeout},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, _ := newSSEServer(t, func(w http.ResponseWriter, r *http.Request, _ *recordedRequest) {
+				w.WriteHeader(c.status)
+				_, _ = io.WriteString(w, c.body)
+			})
+			m := &model.Model{Env: model.Env{BaseURL: srv.URL, Model: "m", AuthToken: "tok-shouldnotleak-1234"}}
+			client := NewClient(Options{Checks: CheckStream, Timeout: 5 * time.Second})
+			res := client.TestProvider(context.Background(), "srv", m)
+			if len(res) != 1 || res[0].Status == StatusOK {
+				t.Fatalf("expected one failing result, got %+v", res)
+			}
+			if res[0].ErrorKind != c.wantKind {
+				t.Errorf("ErrorKind = %q, want %q (err=%q)", res[0].ErrorKind, c.wantKind, res[0].Error)
+			}
+			if strings.Contains(res[0].Error, "tok-shouldnotleak-1234") {
+				t.Errorf("raw token leaked into error: %s", res[0].Error)
+			}
+		})
+	}
+}
+
+func TestClientTimeoutClassified(t *testing.T) {
+	srv, _ := newSSEServer(t, func(w http.ResponseWriter, r *http.Request, _ *recordedRequest) {
+		time.Sleep(300 * time.Millisecond)
+		writeSSE(w, []string{`event: message_stop
+data: {"type":"message_stop"}`})
+	})
+	m := &model.Model{Env: model.Env{BaseURL: srv.URL, Model: "m", AuthToken: "tok"}}
+	client := NewClient(Options{Checks: CheckStream, Timeout: 30 * time.Millisecond})
+	res := client.TestProvider(context.Background(), "srv", m)
+	if len(res) != 1 || res[0].Status != StatusFail {
+		t.Fatalf("expected one fail result, got %+v", res)
+	}
+	if res[0].ErrorKind != ErrKindTimeout {
+		t.Errorf("ErrorKind = %q, want timeout (err=%q)", res[0].ErrorKind, res[0].Error)
+	}
+}
+
+func TestClientUnreachableClassifiedNetwork(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	url := srv.URL
+	srv.Close() // leave a closed port behind so the dial fails
+
+	m := &model.Model{Env: model.Env{BaseURL: url, Model: "m", AuthToken: "tok"}}
+	client := NewClient(Options{Checks: CheckStream, Timeout: 5 * time.Second})
+	res := client.TestProvider(context.Background(), "srv", m)
+	if len(res) != 1 || res[0].Status != StatusFail {
+		t.Fatalf("expected one fail result, got %+v", res)
+	}
+	if res[0].ErrorKind != ErrKindNetwork {
+		t.Errorf("ErrorKind = %q, want network (err=%q)", res[0].ErrorKind, res[0].Error)
+	}
+}
+
+func TestClientInStreamErrorEventClassified(t *testing.T) {
+	// Gateways may return HTTP 200 and deliver the failure as an SSE error
+	// event; the apiType inside it must drive the classification.
+	srv, _ := newSSEServer(t, func(w http.ResponseWriter, r *http.Request, _ *recordedRequest) {
+		writeSSE(w, []string{
+			`event: message_start
+data: {"type":"message_start","message":{}}`,
+			`event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+		})
+	})
+	m := &model.Model{Env: model.Env{BaseURL: srv.URL, Model: "m", AuthToken: "tok"}}
+	client := NewClient(Options{Checks: CheckStream, Timeout: 5 * time.Second})
+	res := client.TestProvider(context.Background(), "srv", m)
+	if len(res) != 1 || res[0].Status != StatusFail {
+		t.Fatalf("expected one fail result, got %+v", res)
+	}
+	if res[0].ErrorKind != ErrKindOverloaded {
+		t.Errorf("ErrorKind = %q, want overloaded (err=%q)", res[0].ErrorKind, res[0].Error)
+	}
+}
+
+func TestClientEmptyStreamClassified(t *testing.T) {
+	srv, _ := newSSEServer(t, func(w http.ResponseWriter, r *http.Request, _ *recordedRequest) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+	})
+	m := &model.Model{Env: model.Env{BaseURL: srv.URL, Model: "m", AuthToken: "tok"}}
+	client := NewClient(Options{Checks: CheckStream, Timeout: 5 * time.Second})
+	res := client.TestProvider(context.Background(), "srv", m)
+	if len(res) != 1 || res[0].Status != StatusFail {
+		t.Fatalf("expected one fail result, got %+v", res)
+	}
+	if res[0].ErrorKind != ErrKindEmptyResp {
+		t.Errorf("ErrorKind = %q, want empty_response (err=%q)", res[0].ErrorKind, res[0].Error)
+	}
+}

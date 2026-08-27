@@ -1,6 +1,8 @@
 package tester
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -38,6 +40,24 @@ func TestStatusUpsertOKWhenAllOK(t *testing.T) {
 	if sf.Results["b"].Status != StatusOK {
 		t.Fatalf("expected ok, got %s", sf.Results["b"].Status)
 	}
+	if sf.Results["b"].ErrorKind != ErrKindNone {
+		t.Fatalf("ok providers must carry no error kind, got %q", sf.Results["b"].ErrorKind)
+	}
+}
+
+func TestStatusUpsertCarriesErrorKind(t *testing.T) {
+	sf := &StatusFile{Results: map[string]ProviderStatus{}}
+	sf.Upsert([]Result{
+		{Provider: "d", Check: "stream", Status: StatusFail, Error: "http 401: nope", ErrorKind: ErrKindAuth},
+		{Provider: "d", Check: "tool", Status: StatusFail, Error: "http 429: slow", ErrorKind: ErrKindRateLimit},
+	})
+	got := sf.Results["d"]
+	if got.Status != StatusFail {
+		t.Fatalf("expected fail, got %s", got.Status)
+	}
+	if got.Error != "http 401: nope" || got.ErrorKind != ErrKindAuth {
+		t.Fatalf("first non-OK row not captured with its kind: %q / %q", got.Error, got.ErrorKind)
+	}
 }
 
 // TestStatusUpsertStreamIsSourceOfTruth: a failed tool probe (including a
@@ -61,5 +81,33 @@ func TestStatusUpsertStreamIsSourceOfTruth(t *testing.T) {
 	}
 	if sf.Results["d"].Status != StatusFail {
 		t.Fatalf("provider with no passing check should be FAIL, got %s", sf.Results["d"].Status)
+	}
+}
+
+// Legacy caches written before error_kind existed must still load cleanly.
+func TestLoadStatusLegacyFixture(t *testing.T) {
+	home := t.TempDir()
+	// Home() resolves via os.UserHomeDir: USERPROFILE on Windows, HOME elsewhere.
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".cc-switch-cli")
+	path := filepath.Join(dir, statusFileName)
+	legacy := `{"timestamp":"2026-01-01T00:00:00Z","results":{"old":` +
+		`{"status":"fail","checks":"stream","error":"http 401: bad key","tested_at":"2026-01-01T00:00:00Z"}}}`
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sf, err := LoadStatus()
+	if err != nil {
+		t.Fatalf("legacy fixture failed to load: %v", err)
+	}
+	if sf == nil || sf.Results["old"].Status != StatusFail {
+		t.Fatalf("unexpected load result: %+v", sf)
+	}
+	if sf.Results["old"].ErrorKind != ErrKindNone {
+		t.Fatalf("missing error_kind must decode as none, got %q", sf.Results["old"].ErrorKind)
 	}
 }

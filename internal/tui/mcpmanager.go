@@ -30,6 +30,7 @@ const (
 	mcpModeAdd
 	mcpModeRename
 	mcpModeEdit
+	mcpModeTestResults
 )
 
 type mcpItem struct {
@@ -118,6 +119,7 @@ type mcpManagerModel struct {
 	err         error
 	testTotal   int
 	testDone    int
+	lastResults []mcptest.Result // most recent probe batch, reopenable with R
 	// add/rename/edit form state
 	inputPrompt string
 	renameFrom  string
@@ -238,6 +240,13 @@ func (m mcpManagerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.SetSize(msg.Width, msg.Height-2)
 		m.viewport.Width = msg.Width
 		m.viewport.Height = msg.Height - 4
+		if m.mode == mcpModeTestResults && len(m.lastResults) > 0 {
+			m.viewport.SetContent(renderTestResults(
+				summarizeMCP(m.lastResults),
+				renderMCPTestResults(m.lastResults),
+				msg.Width,
+			))
+		}
 	case mcpOpDoneMsg:
 		m.statusMsg = msg.msg
 		m.err = msg.err
@@ -252,8 +261,8 @@ func (m mcpManagerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.testDone = msg.done
 		m.testTotal = msg.total
 	case mcpTestResultsMsg:
-		m.mode = mcpModeList
 		if msg.err != nil {
+			m.mode = mcpModeList
 			m.err = msg.err
 			return m, nil
 		}
@@ -263,6 +272,18 @@ func (m mcpManagerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		st.Upsert(msg.results)
 		_ = mcptest.SaveStatus(st)
+		// Show the full probe results — errors included — instead of dropping
+		// the user back on a bare list with no explanation of a FAIL.
+		m.mode = mcpModeTestResults
+		m.lastResults = msg.results
+		m.err = nil
+		m.statusMsg = ""
+		m.viewport.GotoTop()
+		m.viewport.SetContent(renderTestResults(
+			summarizeMCP(msg.results),
+			renderMCPTestResults(msg.results),
+			m.viewport.Width,
+		))
 		return m, m.reloadCmd()
 	case mcpToolsContentMsg:
 		m.viewport.SetContent(msg.content)
@@ -279,7 +300,7 @@ func (m mcpManagerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		switch m.mode {
-		case mcpModeView, mcpModeTools:
+		case mcpModeView, mcpModeTools, mcpModeTestResults:
 			switch msg.String() {
 			case "esc", "q", "v", " ", "l":
 				m.mode = mcpModeList
@@ -408,6 +429,18 @@ func (m mcpManagerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.mode = mcpModeTesting
 			return m, m.testCmd(entries)
+		case "R":
+			if len(m.lastResults) == 0 {
+				return m, nil
+			}
+			m.mode = mcpModeTestResults
+			m.viewport.GotoTop()
+			m.viewport.SetContent(renderTestResults(
+				summarizeMCP(m.lastResults),
+				renderMCPTestResults(m.lastResults),
+				m.viewport.Width,
+			))
+			return m, nil
 		case "s":
 			m.cycleScopeFilter()
 			return m, m.reloadCmd()
@@ -445,6 +478,8 @@ func (m mcpManagerModel) View() string {
 		footer = errorStyle.Render(fmt.Sprintf("delete %q? y/n", name))
 	case mcpModeTesting:
 		footer = m.spinner.View() + " " + fmt.Sprintf("testing %d/%d", m.testDone, m.testTotal)
+	case mcpModeTestResults:
+		return m.viewport.View() + "\n" + helpStyle.Render("esc/l: back • j/k, arrows, pgup/pgdn: scroll")
 	case mcpModeView:
 		return m.viewport.View() + "\n" + helpStyle.Render("esc/v/space to return")
 	case mcpModeTools:
@@ -461,7 +496,7 @@ func (m mcpManagerModel) View() string {
 		if m.filterScope != "" {
 			scopeHint = m.filterScope
 		}
-		hints := fmt.Sprintf("enter/l: tools  |  a: add  |  e: edit  |  n: rename  |  t: test  |  T: all  |  v: view  |  d: delete  |  s: scope(%s)  |  r: refresh  |  q: quit", scopeHint)
+		hints := fmt.Sprintf("enter/l: tools  |  a: add  |  e: edit  |  n: rename  |  t: test  |  T: all  |  R: last results  |  v: view  |  d: delete  |  s: scope(%s)  |  r: refresh  |  q: quit", scopeHint)
 		footer = helpStyle.Render(hints)
 	}
 	body := m.list.View()

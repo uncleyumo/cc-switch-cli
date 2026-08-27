@@ -49,17 +49,19 @@ type Result struct {
 	TTFT       time.Duration
 	Latency    time.Duration
 	Error      string
+	ErrorKind  ErrorKind `json:"error_kind,omitempty"`
 }
 
 // ProviderStatus is what we persist per-provider in test-status.json.
 type ProviderStatus struct {
-	Status    Status `json:"status"`
-	Checks    string `json:"checks,omitempty"`
-	LatencyMS int64  `json:"latency_ms,omitempty"`
-	TTFTMS    int64  `json:"ttft_ms,omitempty"`
-	HTTPCode  int    `json:"http_code,omitempty"`
-	Error     string `json:"error,omitempty"`
-	TestedAt  string `json:"tested_at"`
+	Status    Status    `json:"status"`
+	Checks    string    `json:"checks,omitempty"`
+	LatencyMS int64     `json:"latency_ms,omitempty"`
+	TTFTMS    int64     `json:"ttft_ms,omitempty"`
+	HTTPCode  int       `json:"http_code,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	ErrorKind ErrorKind `json:"error_kind,omitempty"`
+	TestedAt  string    `json:"tested_at"`
 }
 
 // StatusFile is the on-disk representation of the test-status.json cache.
