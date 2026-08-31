@@ -7,7 +7,7 @@
 （或 **`ccs`**）方便使用。
 
 ```bash
-ccsc use packy-bridge   # 切换全局提供商（原子写入，自动备份）
+ccsc use packy-bridge   # 切换全局提供商（字段合并，原子写入，自动备份）
 ccsc current            # → packy-bridge
 ```
 
@@ -64,13 +64,18 @@ ccsc init               # 创建 ~/.cc-switch-cli/ + config.toml
   "env": {
     "ANTHROPIC_AUTH_TOKEN": "your-api-key",
     "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
-    "ANTHROPIC_MODEL": "claude-sonnet-4-6"
-  },
-  "model": "sonnet"
+    "ANTHROPIC_MODEL": "opus",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000"
+  }
 }
 ```
 
 仓库 `models/` 目录附带模板（`claude`、`deepseek`、`mimo`），`init` 后可拷贝或改写。
+
+切换是合并语义：provider 声明的顶层键覆盖 `settings.json` 同名键，未声明的键
+（hooks、permissions 等）原样保留，Claude Code 或插件在两次切换之间写入的设置
+不会丢失。`env` 逐键合并，新 provider 未声明的 `ANTHROPIC_*` / `CLAUDE_CODE_*`
+键会被清除。
 
 ## 命令
 

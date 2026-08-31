@@ -14,7 +14,7 @@ import (
 var useCmd = &cobra.Command{
 	Use:   "use [model]",
 	Short: "Activate a model provider globally",
-	Long:  "Replace ~/.claude/settings.json with the named provider. With no argument in an interactive terminal, opens a picker.",
+	Long:  "Merge the named provider into ~/.claude/settings.json: keys the provider declares override the file, keys it does not declare (hooks, permissions, ...) are preserved. With no argument in an interactive terminal, opens a picker.",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := resolveModelArg(args, "use")

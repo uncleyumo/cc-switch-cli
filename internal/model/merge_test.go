@@ -62,6 +62,65 @@ func TestMergeRejectsInvalidBase(t *testing.T) {
 	}
 }
 
+func TestOverlayProviderPreservesUndeclaredKeys(t *testing.T) {
+	base := []byte(`{
+	  "hooks": {"SessionStart": [{"hooks": [{"type": "command"}]}]},
+	  "permissions": {"allow": ["Bash"]},
+	  "statusLine": {"type": "command", "command": "old"},
+	  "env": {"ANTHROPIC_BASE_URL": "http://old", "HTTP_PROXY": "http://proxy:8080"}
+	}`)
+	prov, err := Parse([]byte(`{
+	  "env": {"ANTHROPIC_AUTH_TOKEN": "sk", "ANTHROPIC_BASE_URL": "https://new"},
+	  "statusLine": {"type": "command", "command": "new"}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := OverlayProvider(base, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `"SessionStart"`) || !strings.Contains(s, `"Bash"`) {
+		t.Fatalf("undeclared target keys dropped: %s", s)
+	}
+	if !strings.Contains(s, `"command": "new"`) || strings.Contains(s, `"old"`) {
+		t.Fatalf("declared key not replaced wholesale: %s", s)
+	}
+	if !strings.Contains(s, `"HTTP_PROXY"`) {
+		t.Fatalf("non-model env key dropped: %s", s)
+	}
+	for _, stale := range []string{"ANTHROPIC_MODEL", "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "http://old"} {
+		if strings.Contains(s, stale) {
+			t.Fatalf("stale model env key %q survived: %s", stale, s)
+		}
+	}
+}
+
+func TestOverlayProviderEmptyBase(t *testing.T) {
+	prov, err := Parse([]byte(`{"env":{"ANTHROPIC_BASE_URL":"https://x"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := OverlayProvider(nil, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"https://x"`) {
+		t.Fatalf("provider env missing from fresh document: %s", string(out))
+	}
+}
+
+func TestOverlayProviderRejectsInvalidBase(t *testing.T) {
+	prov, err := Parse([]byte(`{"env":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OverlayProvider([]byte("not json"), prov); err == nil {
+		t.Fatal("expected error for invalid base json")
+	}
+}
+
 func TestMergeProviderEnvOverridesSameKey(t *testing.T) {
 	base := []byte(`{"env":{"ANTHROPIC_BASE_URL":"http://old","ANTHROPIC_MODEL":"old"}}`)
 	prov := &Model{Env: Env{BaseURL: "https://new", Model: "new"}}

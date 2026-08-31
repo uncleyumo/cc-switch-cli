@@ -1,7 +1,6 @@
 package model
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -202,26 +201,21 @@ func Remove(name string) error {
 	return nil
 }
 
-// Template returns a Model shaped like the shipped claude.json sample with
-// placeholder values. Useful as the starting point for `model add`.
+// Template returns the starting point for `model add`: Anthropic tier aliases
+// as model ids, no top-level "model", and a 500k context window. Kept minimal
+// so a merged switch does not clobber live keys such as enabledPlugins.
 func Template(name string) *Model {
-	rest := map[string]json.RawMessage{
-		"model":                             json.RawMessage(`"sonnet"`),
-		"enabledPlugins":                    json.RawMessage(`{}`),
-		"extraKnownMarketplaces":            json.RawMessage(`{}`),
-		"alwaysThinkingEnabled":             json.RawMessage(`false`),
-		"skipDangerousModePermissionPrompt": json.RawMessage(`true`),
-	}
-	return &Model{
+	m := &Model{
 		Name: name,
 		Env: Env{
 			AuthToken:          "your-anthropic-api-key",
 			BaseURL:            "https://api.anthropic.com",
-			Model:              "claude-sonnet-4-6",
-			DefaultHaikuModel:  "claude-haiku-4-5-20251001",
-			DefaultOpusModel:   "claude-opus-4-7",
-			DefaultSonnetModel: "claude-sonnet-4-6",
+			Model:              "opus",
+			DefaultHaikuModel:  "claude-haiku",
+			DefaultOpusModel:   "claude-opus",
+			DefaultSonnetModel: "claude-sonnet",
 		},
-		Rest: rest,
 	}
+	m.ApplyContextWindow(500_000)
+	return m
 }

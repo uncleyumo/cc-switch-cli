@@ -2,12 +2,12 @@
 
 [English](README.md) | [中文](README_zh.md)
 
-A library of Claude Code provider configs, swapped into `~/.claude/settings.json`
+A library of Claude Code provider configs, merged into `~/.claude/settings.json`
 with one command. Single Go binary; rename it to a short name such as **`ccsc`**
 (or **`ccs`**) on your `PATH`.
 
 ```bash
-ccsc use packy-bridge   # swap the global provider (atomic, auto-backup)
+ccsc use packy-bridge   # switch the global provider (field-merge, atomic, auto-backup)
 ccsc current            # → packy-bridge
 ```
 
@@ -65,14 +65,20 @@ Each file in `~/.cc-switch-cli/models/` is one complete Claude Code `settings.js
   "env": {
     "ANTHROPIC_AUTH_TOKEN": "your-api-key",
     "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
-    "ANTHROPIC_MODEL": "claude-sonnet-4-6"
-  },
-  "model": "sonnet"
+    "ANTHROPIC_MODEL": "opus",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000"
+  }
 }
 ```
 
 Bundled templates live in the repo under `models/` (`claude`, `deepseek`, `mimo`) —
 copy or adapt them after `init`.
+
+Switching merges the provider into the live `settings.json`: top-level keys the
+provider declares override the file; keys it does not declare (hooks,
+permissions, ...) are preserved, so settings written by Claude Code or plugins
+survive switches. `env` is merged per key, and stale `ANTHROPIC_*` /
+`CLAUDE_CODE_*` keys the new provider does not set are dropped.
 
 ## Commands
 

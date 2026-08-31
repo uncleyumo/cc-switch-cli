@@ -22,16 +22,17 @@ func ListModels() ([]string, error) {
 	return model.List()
 }
 
-// SwitchProvider replaces the target settings file with a byte-copy of the
-// provider file, updates the current marker and appends to the audit log.
-// Byte-copy is intentional: it keeps the global switch hot-path lossless and
-// independent of the Model parser.
+// SwitchProvider merges the named provider into the target settings file,
+// updates the current marker and appends to the audit log. Top-level keys the
+// provider declares replace the target's; keys it does not declare (hooks,
+// permissions, ...) are preserved so plugin state survives switches. env is
+// merged per key with stale model-owned keys dropped.
 func SwitchProvider(name string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	data, err := model.ReadRaw(name)
+	provider, err := model.LoadByName(name)
 	if err != nil {
 		return err
 	}
@@ -40,6 +41,19 @@ func SwitchProvider(name string) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(cfg.Target.Path), 0o755); err != nil {
 		return fmt.Errorf("failed to create target directory: %w", err)
+	}
+	var data []byte
+	if existing, err := os.ReadFile(cfg.Target.Path); err == nil {
+		data, err = model.OverlayProvider(existing, provider)
+		if err != nil {
+			return err
+		}
+	} else if errors.Is(err, os.ErrNotExist) {
+		if data, err = model.OverlayProvider(nil, provider); err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("failed to read current settings: %w", err)
 	}
 	if err := fsutil.AtomicWrite(cfg.Target.Path, data, 0o644); err != nil {
 		return fmt.Errorf("failed to update target settings: %w", err)

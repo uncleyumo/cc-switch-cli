@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -30,39 +31,92 @@ func MergeProviderInto(base []byte, provider *Model) ([]byte, error) {
 		}
 	}
 
-	// Merge env: existing env keys are preserved, provider env keys overlay.
-	existingEnv := map[string]json.RawMessage{}
-	if raw, ok := doc["env"]; ok && len(bytes.TrimSpace(raw)) > 0 {
-		if err := json.Unmarshal(raw, &existingEnv); err != nil {
-			return nil, fmt.Errorf("existing env is not a JSON object: %w", err)
-		}
+	if err := mergeEnv(doc, provider, func(k string) bool {
+		return slices.Contains(ModelScopedEnvKeys, k)
+	}); err != nil {
+		return nil, err
 	}
-	providerEnvRaw, err := json.Marshal(provider.Env)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal provider env: %w", err)
-	}
-	providerEnv := map[string]json.RawMessage{}
-	if err := json.Unmarshal(providerEnvRaw, &providerEnv); err != nil {
-		return nil, fmt.Errorf("failed to re-parse provider env: %w", err)
-	}
-	for k, v := range providerEnv {
-		existingEnv[k] = v
-	}
-	for _, k := range ModelScopedEnvKeys {
-		if _, ok := providerEnv[k]; !ok {
-			delete(existingEnv, k)
-		}
-	}
-	mergedEnv, err := json.Marshal(existingEnv)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal merged env: %w", err)
-	}
-	doc["env"] = mergedEnv
 
 	// Top-level "model" carries the Claude Code model selector; override if the
 	// provider sets one.
 	if raw, ok := provider.Rest["model"]; ok {
 		doc["model"] = raw
+	}
+
+	pretty, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(pretty, '\n'), nil
+}
+
+// mergeEnv merges provider.Env into doc["env"] per key: provider keys overlay
+// the base, and base keys the provider does not set are removed when
+// dropStale reports true. Everything else in the base env is preserved.
+func mergeEnv(doc map[string]json.RawMessage, provider *Model, dropStale func(k string) bool) error {
+	existingEnv := map[string]json.RawMessage{}
+	if raw, ok := doc["env"]; ok && len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &existingEnv); err != nil {
+			return fmt.Errorf("existing env is not a JSON object: %w", err)
+		}
+	}
+	providerEnvRaw, err := json.Marshal(provider.Env)
+	if err != nil {
+		return fmt.Errorf("failed to marshal provider env: %w", err)
+	}
+	providerEnv := map[string]json.RawMessage{}
+	if err := json.Unmarshal(providerEnvRaw, &providerEnv); err != nil {
+		return fmt.Errorf("failed to re-parse provider env: %w", err)
+	}
+	for k, v := range providerEnv {
+		existingEnv[k] = v
+	}
+	for k := range existingEnv {
+		if _, ok := providerEnv[k]; !ok && dropStale(k) {
+			delete(existingEnv, k)
+		}
+	}
+	mergedEnv, err := json.Marshal(existingEnv)
+	if err != nil {
+		return fmt.Errorf("failed to marshal merged env: %w", err)
+	}
+	doc["env"] = mergedEnv
+	return nil
+}
+
+// OverlayProvider merges a provider into the live global settings.json for
+// `ccsc use`. Every top-level key the provider declares replaces the base's
+// key wholesale; base keys the provider does not declare (hooks, permissions,
+// statusLine, ...) are preserved, so settings written by Claude Code or
+// plugins between switches survive.
+//
+// env is the exception and is merged per key: provider keys overlay, and
+// model-owned keys (ANTHROPIC_* / CLAUDE_CODE_*, see IsModelEnvKey) the
+// provider does not set are dropped so a previous provider's credentials,
+// model ids or context window cannot leak onto the next one. Non-model env
+// keys are preserved.
+//
+// Returns pretty-printed JSON with a trailing newline. Fails without touching
+// the base file if the base is not valid JSON.
+func OverlayProvider(base []byte, provider *Model) ([]byte, error) {
+	if provider == nil {
+		return nil, fmt.Errorf("provider is nil")
+	}
+
+	doc := map[string]json.RawMessage{}
+	trimmed := bytes.TrimSpace(base)
+	if len(trimmed) > 0 {
+		if err := json.Unmarshal(trimmed, &doc); err != nil {
+			return nil, fmt.Errorf("existing settings.json is not a JSON object: %w", err)
+		}
+	}
+
+	if err := mergeEnv(doc, provider, IsModelEnvKey); err != nil {
+		return nil, err
+	}
+
+	for k, v := range provider.Rest {
+		doc[k] = v
 	}
 
 	pretty, err := json.MarshalIndent(doc, "", "  ")
