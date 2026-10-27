@@ -19,7 +19,7 @@ import (
 var modelDoctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Show the effective and on-the-wire model id per provider",
-	Long: "For each provider, prints the configured model id, the id after tier-alias\n" +
+	Long: "For each provider, prints every configured model slot, the id after tier-alias\n" +
 		"resolution, the id actually sent in the request body (\"wire\"), and the\n" +
 		"declared group context window.\n\n" +
 		"Set the group default with the context-window field in `model edit` (128k /\n" +
@@ -45,27 +45,28 @@ var modelDoctorCmd = &cobra.Command{
 				fmt.Println(ui.Fail("skip " + n + ": " + err.Error()))
 				continue
 			}
-			resolved := m.ResolvedModelID()
-			wire := m.WireModelID()
 			window := m.Env.ContextWindowTokens()
 			windowLabel := "-"
 			if window > 0 {
 				windowLabel = model.FormatContextWindow(window)
 			}
-			line := fmt.Sprintf("  %-20s  resolved %-26s  wire %-24s  window %s",
-				ui.Bold(n), quoteOrDash(resolved), quoteOrDash(wire), windowLabel)
-			fmt.Println(line)
+			fmt.Printf("  %s  window %s\n", ui.Bold(n), windowLabel)
 
-			if rawEsc(resolved) {
-				anyEsc = true
-				fmt.Println("    " + ui.Warn("⚠ contains a raw ANSI escape byte (real terminal artifact) — edit this model and re-type the model id by hand"))
-			} else if resolved != "" && resolved != wire {
-				fmt.Println("    " + ui.Dim("[1m]/[Nk] kept in config, stripped on the wire (normal)"))
-			} else if resolved == "" {
+			targets := m.Targets()
+			if len(targets) == 0 {
 				fmt.Println("    " + ui.Warn("no model id could be resolved from this config"))
 			}
-
-			printWindowAdvice(m, resolved, window)
+			for _, t := range targets {
+				fmt.Printf("    %-10s resolved %-26s wire %-24s\n",
+					t.Slot, quoteOrDash(t.ID), quoteOrDash(t.WireID))
+				if rawEsc(t.ID) {
+					anyEsc = true
+					fmt.Println("      " + ui.Warn("⚠ contains a raw ANSI escape byte (real terminal artifact) — edit this model and re-type the model id by hand"))
+				} else if t.ID != t.WireID {
+					fmt.Println("      " + ui.Dim("[1m]/[Nk] kept in config, stripped on the wire (normal)"))
+				}
+				printWindowAdvice(m, t.ID, window)
+			}
 		}
 
 		fmt.Println()
@@ -84,7 +85,7 @@ func printWindowAdvice(m *model.Model, resolved string, window int) {
 	}
 	unrecognized := !model.LooksLikeClaudeModel(resolved)
 	if m.HasAny1MMarker() && window > 0 {
-		fmt.Println("    " + ui.Dim("group window " + model.FormatContextWindow(window) + "; ids with [1m] assume 1M and ignore MAX_CONTEXT"))
+		fmt.Println("    " + ui.Dim("group window "+model.FormatContextWindow(window)+"; ids with [1m] assume 1M and ignore MAX_CONTEXT"))
 		return
 	}
 	if unrecognized && !model.Has1MMarker(resolved) && window == 0 {

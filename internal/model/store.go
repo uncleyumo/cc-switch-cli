@@ -211,9 +211,10 @@ func Template(name string) *Model {
 			AuthToken:          "your-anthropic-api-key",
 			BaseURL:            "https://api.anthropic.com",
 			Model:              "opus",
-			DefaultHaikuModel:  "claude-haiku",
-			DefaultOpusModel:   "claude-opus",
-			DefaultSonnetModel: "claude-sonnet",
+			DefaultFableModel:  "claude-fable-5-1",
+			DefaultHaikuModel:  "claude-haiku-5-5",
+			DefaultOpusModel:   "claude-opus-5-5",
+			DefaultSonnetModel: "claude-sonnet-5-5",
 		},
 	}
 	m.ApplyContextWindow(500_000)

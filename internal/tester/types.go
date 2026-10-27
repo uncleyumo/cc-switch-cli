@@ -40,9 +40,11 @@ type Options struct {
 	MaxTokens   int
 }
 
-// Result is one provider × one check.
+// Result is one provider × one model × one check.
 type Result struct {
 	Provider   string
+	ModelID    string // wire model id sent in the request
+	ModelSlot  string // config slot: default/top-level/fable/opus/sonnet/haiku
 	Check      string
 	Status     Status
 	HTTPStatus int
@@ -54,14 +56,15 @@ type Result struct {
 
 // ProviderStatus is what we persist per-provider in test-status.json.
 type ProviderStatus struct {
-	Status    Status    `json:"status"`
-	Checks    string    `json:"checks,omitempty"`
-	LatencyMS int64     `json:"latency_ms,omitempty"`
-	TTFTMS    int64     `json:"ttft_ms,omitempty"`
-	HTTPCode  int       `json:"http_code,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	ErrorKind ErrorKind `json:"error_kind,omitempty"`
-	TestedAt  string    `json:"tested_at"`
+	Status     Status    `json:"status"`
+	ModelCount int       `json:"model_count,omitempty"`
+	Checks     string    `json:"checks,omitempty"`
+	LatencyMS  int64     `json:"latency_ms,omitempty"`
+	TTFTMS     int64     `json:"ttft_ms,omitempty"`
+	HTTPCode   int       `json:"http_code,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	ErrorKind  ErrorKind `json:"error_kind,omitempty"`
+	TestedAt   string    `json:"tested_at"`
 }
 
 // StatusFile is the on-disk representation of the test-status.json cache.

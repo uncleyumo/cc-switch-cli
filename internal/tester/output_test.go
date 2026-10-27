@@ -3,6 +3,7 @@ package tester
 import (
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -107,16 +108,20 @@ func TestGroupByProviderMergesIdenticalFailures(t *testing.T) {
 		t.Fatalf("expected 2 groups sorted by name, got %+v", groups)
 	}
 	g := groups[0]
-	if len(g.Failures) != 2 {
-		t.Fatalf("identical failures should merge, distinct stay separate: %+v", g.Failures)
+	if len(g.Models) != 1 {
+		t.Fatalf("expected one model group for results without a model id: %+v", g.Models)
 	}
-	if strings.Join(g.Failures[0].Checks, ",") != "stream,tool" {
-		t.Errorf("merged checks = %v, want stream,tool", g.Failures[0].Checks)
+	mg := g.Models[0]
+	if len(mg.Failures) != 2 {
+		t.Fatalf("identical failures should merge, distinct stay separate: %+v", mg.Failures)
+	}
+	if strings.Join(mg.Failures[0].Checks, ",") != "stream,tool" {
+		t.Errorf("merged checks = %v, want stream,tool", mg.Failures[0].Checks)
 	}
 	if g.Worst() != StatusFail {
 		t.Errorf("worst = %q, want fail", g.Worst())
 	}
-	if groups[1].Worst() != StatusOK || len(groups[1].Failures) != 0 {
+	if groups[1].Worst() != StatusOK || len(groups[1].Models[0].Failures) != 0 {
 		t.Errorf("all-ok group should have no failures: %+v", groups[1])
 	}
 }
@@ -130,5 +135,41 @@ func TestSummarizeStyledColorsCounts(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	if got := SummarizeStyled(results); got != plain {
 		t.Errorf("with NO_COLOR, SummarizeStyled = %q, want %q", got, plain)
+	}
+}
+
+func TestGroupByProviderSplitsModels(t *testing.T) {
+	results := []Result{
+		{Provider: "p", ModelID: "m-a", ModelSlot: "default", Check: "stream",
+			Status: StatusOK, TTFT: 100 * time.Millisecond, Latency: 200 * time.Millisecond, HTTPStatus: 200},
+		{Provider: "p", ModelID: "m-a", ModelSlot: "default", Check: "tool", Status: StatusOK},
+		{Provider: "p", ModelID: "m-b", ModelSlot: "sonnet", Check: "stream",
+			Status: StatusFail, Error: "http 401: bad key", ErrorKind: ErrKindAuth, HTTPStatus: 401},
+		{Provider: "p", ModelID: "m-b", ModelSlot: "sonnet", Check: "tool",
+			Status: StatusFail, Error: "http 401: bad key", ErrorKind: ErrKindAuth, HTTPStatus: 401},
+	}
+	groups := GroupByProvider(results)
+	if len(groups) != 1 || len(groups[0].Models) != 2 {
+		t.Fatalf("expected one provider with two model groups, got %+v", groups)
+	}
+	if got := groups[0].Models[0].Label(); got != "default · m-a" {
+		t.Errorf("first model label = %q", got)
+	}
+	if got := groups[0].Models[1].Label(); got != "sonnet · m-b" {
+		t.Errorf("second model label = %q", got)
+	}
+	if groups[0].Models[0].Worst() != StatusOK || groups[0].Models[1].Worst() != StatusFail {
+		t.Errorf("per-model verdicts wrong: %+v", groups[0].Models)
+	}
+	if got := Summarize(results); got != "tested 1 providers, 2 models: 1 ok, 1 fail" {
+		t.Errorf("Summarize = %q", got)
+	}
+	var w strings.Builder
+	PrintResults(&w, results)
+	out := w.String()
+	for _, want := range []string{"default · m-a", "sonnet · m-b", "bad key"} {
+		if !strings.Contains(strings.Join(strings.Fields(out), " "), want) {
+			t.Errorf("PrintResults missing %q:\n%s", want, out)
+		}
 	}
 }

@@ -71,10 +71,10 @@ func buildToolReq(modelID string, maxTokens int) messagesRequest {
 		Stream:    true,
 		Messages: []message{{
 			Role:    "user",
-			Content: "You must call the ccs_probe tool now with status set to \"ok\". Do not write any text, only invoke the tool.",
+			Content: "You must call the ccsc_probe tool now with status set to \"ok\". Do not write any text, only invoke the tool.",
 		}},
 		Tools: []tool{{
-			Name:        "ccs_probe",
+			Name:        "ccsc_probe",
 			Description: "cc-switch-cli availability probe. Invoke this exactly once.",
 			InputSchema: inputSchema{
 				Type: "object",

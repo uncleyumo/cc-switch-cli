@@ -26,7 +26,7 @@ var modelListCmd = &cobra.Command{
 		status, _ := tester.LoadStatus()
 
 		if len(names) == 0 {
-			fmt.Println("(no models yet; add one with `ccs model add <name>`)")
+			fmt.Println("(no models yet; add one with `ccsc model add <name>`)")
 			return nil
 		}
 		for _, n := range names {
@@ -53,6 +53,10 @@ func formatStatus(s tester.ProviderStatus) string {
 	if s.LatencyMS > 0 {
 		latency = " " + (time.Duration(s.LatencyMS) * time.Millisecond).String()
 	}
+	var models string
+	if s.ModelCount > 1 {
+		models = fmt.Sprintf(" %d models", s.ModelCount)
+	}
 	testedAt := s.TestedAt
 	if t, err := time.Parse(time.RFC3339, s.TestedAt); err == nil {
 		testedAt = t.Local().Format("2006-01-02 15:04")
@@ -69,5 +73,5 @@ func formatStatus(s tester.ProviderStatus) string {
 	case tester.StatusUnsupported:
 		label = ui.Warn("OK~")
 	}
-	return fmt.Sprintf("[%s%s @ %s]", label, latency, testedAt)
+	return fmt.Sprintf("[%s%s%s @ %s]", label, models, latency, testedAt)
 }

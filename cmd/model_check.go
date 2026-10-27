@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"cc-switch-cli/internal/manager"
 	"cc-switch-cli/internal/model"
@@ -50,8 +51,8 @@ func shouldExitNonZero(results []tester.Result, strict bool) bool {
 var modelTestCmd = &cobra.Command{
 	Use:   "test [model...]",
 	Short: "Run availability checks against one or more models",
-	Long: "Runs Anthropic streaming and/or tool-call checks against each named provider. Without arguments, tests every model.\n\n" +
-		"Failed checks are classified (auth, rate limit, timeout, network, ...) and the full error is printed below the table.\n\n" +
+	Long: "Runs Anthropic streaming and/or tool-call checks against every configured model of each named provider. Without arguments, tests every model of every provider.\n\n" +
+		"Failed checks are classified (auth, rate limit, timeout, network, ...) and the full error is printed below each model.\n\n" +
 		"Exit status: 1 when any check fails; with --strict, an UNSUPPORTED verdict also fails.\n\n" +
 		"Warning: this issues real API calls against each provider's endpoint and may incur a tiny cost.",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -106,7 +107,16 @@ var modelTestCmd = &cobra.Command{
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
-		results := client.TestAll(ctx, models, nil)
+		var progress func(done, total int)
+		if term.IsTerminal(int(os.Stderr.Fd())) {
+			progress = func(done, total int) {
+				fmt.Fprintf(os.Stderr, "\rtesting models %d/%d...", done, total)
+			}
+		}
+		results := client.TestAll(ctx, models, progress)
+		if progress != nil {
+			fmt.Fprintln(os.Stderr)
+		}
 		tester.PrintResults(os.Stdout, results)
 
 		status, _ := tester.LoadStatus()

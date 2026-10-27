@@ -42,28 +42,46 @@ func NewClient(opts Options) *Client {
 	return &Client{opts: opts}
 }
 
-// TestProvider runs the configured checks against one provider sequentially.
-// Results are returned in check order. A validation failure surfaces as a
-// single fail result rather than crashing the batch.
+// TestProvider runs the configured checks against every model configured in
+// one provider, sequentially, in slot order. Results are returned in model then
+// check order. A validation failure surfaces as a single fail result rather
+// than crashing the batch.
 func (c *Client) TestProvider(ctx context.Context, name string, m *model.Model) []Result {
 	if err := model.Validate(m); err != nil {
-		return []Result{{Provider: name, Check: "validate", Status: StatusFail, Error: err.Error()}}
+		return []Result{{Provider: name, Check: "validate", Status: StatusFail,
+			ErrorKind: ErrKindOther, Error: err.Error()}}
+	}
+	targets := m.Targets()
+	if len(targets) == 0 {
+		return []Result{{Provider: name, Check: "validate", Status: StatusFail,
+			ErrorKind: ErrKindOther, Error: "no configured model id"}}
 	}
 	var results []Result
-	if c.opts.Checks&CheckStream != 0 {
-		results = append(results, c.runStream(ctx, name, m))
-	}
-	if c.opts.Checks&CheckTool != 0 {
-		results = append(results, c.runTool(ctx, name, m))
+	for _, target := range targets {
+		if c.opts.Checks&CheckStream != 0 {
+			results = append(results, c.runStream(ctx, name, m, target))
+		}
+		if c.opts.Checks&CheckTool != 0 {
+			results = append(results, c.runTool(ctx, name, m, target))
+		}
 	}
 	return results
 }
 
 // TestAll runs every named provider in parallel bounded by Options.Concurrency.
-// The progress callback fires after each provider completes; safe to pass nil.
+// Within one provider every configured model is tested in order. The progress
+// callback fires after each provider completes, with counts in models; safe to
+// pass nil.
 func (c *Client) TestAll(ctx context.Context, models map[string]*model.Model, progress func(done, total int)) []Result {
-	total := len(models)
-	names := make([]string, 0, total)
+	total := 0
+	for _, m := range models {
+		if n := len(m.Targets()); n > 0 {
+			total += n
+		} else {
+			total++
+		}
+	}
+	names := make([]string, 0, len(models))
 	for n := range models {
 		names = append(names, n)
 	}
@@ -88,9 +106,13 @@ func (c *Client) TestAll(ctx context.Context, models map[string]*model.Model, pr
 			}
 			defer func() { <-sem }()
 			partial := c.TestProvider(ctx, name, models[name])
+			n := len(models[name].Targets())
+			if n == 0 {
+				n = 1
+			}
 			mu.Lock()
 			results = append(results, partial...)
-			done++
+			done += n
 			d := done
 			mu.Unlock()
 			if progress != nil {
@@ -99,12 +121,10 @@ func (c *Client) TestAll(ctx context.Context, models map[string]*model.Model, pr
 		}()
 	}
 	wg.Wait()
-	// Deterministic order: by provider, then by check within a provider.
+	// Deterministic order: by provider, preserving the model/check order
+	// produced by TestProvider inside each provider.
 	sort.SliceStable(results, func(i, j int) bool {
-		if results[i].Provider != results[j].Provider {
-			return results[i].Provider < results[j].Provider
-		}
-		return results[i].Check < results[j].Check
+		return results[i].Provider < results[j].Provider
 	})
 	return results
 }

@@ -284,6 +284,7 @@ func populateSettings(snap *LocalSnapshot, data []byte) error {
 		m.Env.APIKey != "" ||
 		m.Env.BaseURL != "" ||
 		m.Env.Model != "" ||
+		m.Env.DefaultFableModel != "" ||
 		m.Env.DefaultHaikuModel != "" ||
 		m.Env.DefaultOpusModel != "" ||
 		m.Env.DefaultSonnetModel != "" ||

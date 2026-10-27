@@ -23,13 +23,13 @@ var mcpAddCmd = &cobra.Command{
 	Long: `Add an MCP server entry.
 
 Stdio (default):
-  ccs mcp add myserver -- npx -y @example/mcp-server
-  ccs mcp add myserver -e KEY=value -- /path/to/server --flag
+  ccsc mcp add myserver -- npx -y @example/mcp-server
+  ccsc mcp add myserver -e KEY=value -- /path/to/server --flag
 
 HTTP / SSE / WS:
-  ccs mcp add -t http myserver https://mcp.example.com/mcp
-  ccs mcp add -t http myserver https://mcp.example.com/mcp -H "Authorization: Bearer TOKEN"
-  ccs mcp add -t sse  myserver https://mcp.example.com/sse
+  ccsc mcp add -t http myserver https://mcp.example.com/mcp
+  ccsc mcp add -t http myserver https://mcp.example.com/mcp -H "Authorization: Bearer TOKEN"
+  ccsc mcp add -t sse  myserver https://mcp.example.com/sse
 
 Default scope is local (projects.<cwd>.mcpServers in ~/.claude.json), matching
 claude mcp add. Pass --scope user or --scope project to target a different store.`,
@@ -128,7 +128,7 @@ func buildServerFromFlags(rest []string) (*mcp.Server, error) {
 	switch typ {
 	case "", "stdio":
 		if len(rest) == 0 {
-			return nil, fmt.Errorf("stdio server needs a command; use: ccs mcp add <name> -- <command> [args...]")
+			return nil, fmt.Errorf("stdio server needs a command; use: ccsc mcp add <name> -- <command> [args...]")
 		}
 		return &mcp.Server{
 			Command: rest[0],

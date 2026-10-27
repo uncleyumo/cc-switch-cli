@@ -84,6 +84,25 @@ func TestStatusUpsertStreamIsSourceOfTruth(t *testing.T) {
 	}
 }
 
+func TestStatusUpsertWorstAcrossModels(t *testing.T) {
+	sf := &StatusFile{Results: map[string]ProviderStatus{}}
+	sf.Upsert([]Result{
+		{Provider: "p", ModelID: "opus-x", ModelSlot: "default", Check: "stream", Status: StatusOK},
+		{Provider: "p", ModelID: "haiku-x", ModelSlot: "haiku", Check: "stream",
+			Status: StatusFail, Error: "http 404: no such model", ErrorKind: ErrKindNotFound},
+	})
+	got := sf.Results["p"]
+	if got.Status != StatusFail {
+		t.Fatalf("one dead model must make the provider FAIL, got %s", got.Status)
+	}
+	if got.ModelCount != 2 {
+		t.Fatalf("model count = %d, want 2", got.ModelCount)
+	}
+	if got.Error != "haiku-x: http 404: no such model" {
+		t.Fatalf("error should name the failing model: %q", got.Error)
+	}
+}
+
 // Legacy caches written before error_kind existed must still load cleanly.
 func TestLoadStatusLegacyFixture(t *testing.T) {
 	home := t.TempDir()

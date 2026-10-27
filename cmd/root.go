@@ -10,11 +10,11 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:     "cc-switch-cli",
-	Aliases: []string{"ccs"},
-	Short:   "Manage Claude Code model providers and MCP servers",
-	Long:    "cc-switch-cli maintains a library of Claude Code model provider settings, swaps them into ~/.claude/settings.json, and manages MCP server entries in ~/.claude.json / .mcp.json. Encrypted export/import moves configs between machines. See `cc-switch-cli <command> --help` for details.",
-	Version: version.String(),
+	Use:           "cc-switch-cli",
+	Aliases:       []string{"ccsc"},
+	Short:         "Manage Claude Code model providers and MCP servers",
+	Long:          "cc-switch-cli maintains a library of Claude Code model provider settings, swaps them into ~/.claude/settings.json, and manages MCP server entries in ~/.claude.json / .mcp.json. Encrypted export/import moves configs between machines. See `cc-switch-cli <command> --help` for details.",
+	Version:       version.String(),
 	SilenceUsage:  true,
 	SilenceErrors: false,
 }

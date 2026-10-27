@@ -9,7 +9,7 @@ import (
 	"cc-switch-cli/internal/ui"
 )
 
-// CheckLine is one per-check row inside a provider group.
+// CheckLine is one per-check row inside a model group.
 type CheckLine struct {
 	Check    string
 	Status   Status
@@ -32,36 +32,65 @@ type Failure struct {
 	Error    string
 }
 
-// ProviderGroup is the per-provider slice of a test batch, split into passing
-// check lines and deduplicated failures.
-type ProviderGroup struct {
-	Provider string
+// ModelGroup is the per-model slice of a test batch. A provider with several
+// configured model ids gets one ModelGroup per id; each is rendered with its
+// own verdict so one dead tier does not hide the others.
+type ModelGroup struct {
+	Slot     string // config slot: default/top-level/fable/opus/sonnet/haiku
+	ModelID  string // wire model id
 	OKs      []CheckLine
 	Failures []Failure
 }
 
-// Worst collapses the group into the headline verdict.
-func (g ProviderGroup) Worst() Status {
-	fail := false
+// Worst collapses one model into its headline verdict.
+func (g ModelGroup) Worst() Status {
 	for _, f := range g.Failures {
 		if f.Status == StatusFail {
-			fail = true
-			break
+			return StatusFail
 		}
 	}
-	switch {
-	case fail:
-		return StatusFail
-	case len(g.Failures) > 0:
+	if len(g.Failures) > 0 {
 		return StatusUnsupported
-	default:
-		return StatusOK
 	}
+	return StatusOK
 }
 
-// GroupByProvider collapses a batch into per-provider display groups sorted by
-// name. Failed checks that share verdict and error text are merged so their
-// message is printed once; passing checks keep their own rows.
+// Label renders the model group heading, e.g. "sonnet · claude-sonnet-5-5".
+func (g ModelGroup) Label() string {
+	if g.ModelID == "" {
+		return ""
+	}
+	if g.Slot == "" {
+		return g.ModelID
+	}
+	return g.Slot + " · " + g.ModelID
+}
+
+// ProviderGroup is one provider's results, split per configured model.
+type ProviderGroup struct {
+	Provider string
+	Models   []ModelGroup
+}
+
+// Worst collapses the provider into the worst verdict among its models: a
+// provider is only fully OK when every configured model is OK.
+func (g ProviderGroup) Worst() Status {
+	worst := StatusOK
+	for _, m := range g.Models {
+		switch m.Worst() {
+		case StatusFail:
+			return StatusFail
+		case StatusUnsupported:
+			worst = StatusUnsupported
+		}
+	}
+	return worst
+}
+
+// GroupByProvider collapses a batch into per-provider, per-model display
+// groups sorted by provider name. Within a provider the configured slot order
+// is preserved. Failed checks that share verdict and error text are merged so
+// their message is printed once; passing checks keep their own rows.
 func GroupByProvider(results []Result) []ProviderGroup {
 	byName := map[string][]Result{}
 	names := make([]string, 0, len(results))
@@ -76,63 +105,79 @@ func GroupByProvider(results []Result) []ProviderGroup {
 	groups := make([]ProviderGroup, 0, len(names))
 	for _, name := range names {
 		g := ProviderGroup{Provider: name}
-		merged := map[string]int{} // status|error -> index into g.Failures
+		var modelOrder []string
+		byModel := map[string][]Result{}
+		slots := map[string]string{}
 		for _, r := range byName[name] {
-			if r.Status == StatusOK {
-				g.OKs = append(g.OKs, CheckLine{
-					Check: r.Check, Status: r.Status,
-					TTFT: r.TTFT, Latency: r.Latency, HTTPCode: r.HTTPStatus,
-				})
-				continue
+			if _, seen := byModel[r.ModelID]; !seen {
+				modelOrder = append(modelOrder, r.ModelID)
+				slots[r.ModelID] = r.ModelSlot
 			}
-			key := string(r.Status) + "|" + r.Error
-			if idx, seen := merged[key]; seen {
-				g.Failures[idx].Checks = append(g.Failures[idx].Checks, r.Check)
-				if g.Failures[idx].HTTPCode == 0 && r.HTTPStatus != 0 {
-					g.Failures[idx].HTTPCode = r.HTTPStatus
-				}
-				if r.Latency > g.Failures[idx].Latency {
-					g.Failures[idx].Latency = r.Latency
-				}
-				continue
-			}
-			merged[key] = len(g.Failures)
-			g.Failures = append(g.Failures, Failure{
-				Checks:   []string{r.Check},
-				Status:   r.Status,
-				HTTPCode: r.HTTPStatus,
-				Latency:  r.Latency,
-				Kind:     r.ErrorKind,
-				Error:    r.Error,
-			})
+			byModel[r.ModelID] = append(byModel[r.ModelID], r)
+		}
+		for _, id := range modelOrder {
+			g.Models = append(g.Models, buildModelGroup(slots[id], id, byModel[id]))
 		}
 		groups = append(groups, g)
 	}
 	return groups
 }
 
-// providerTally folds the batch into provider counts per headline verdict.
-func providerTally(results []Result) (providers, ok, fail, unsupported int) {
-	byProvider := map[string][]Result{}
-	names := make([]string, 0, len(results))
+// buildModelGroup splits one model's results into passing lines and merged
+// failures, preserving result order.
+func buildModelGroup(slot, id string, results []Result) ModelGroup {
+	g := ModelGroup{Slot: slot, ModelID: id}
+	merged := map[string]int{} // status|error -> index into g.Failures
 	for _, r := range results {
-		if _, seen := byProvider[r.Provider]; !seen {
-			names = append(names, r.Provider)
+		if r.Status == StatusOK {
+			g.OKs = append(g.OKs, CheckLine{
+				Check: r.Check, Status: r.Status,
+				TTFT: r.TTFT, Latency: r.Latency, HTTPCode: r.HTTPStatus,
+			})
+			continue
 		}
-		byProvider[r.Provider] = append(byProvider[r.Provider], r)
+		key := string(r.Status) + "|" + r.Error
+		if idx, seen := merged[key]; seen {
+			g.Failures[idx].Checks = append(g.Failures[idx].Checks, r.Check)
+			if g.Failures[idx].HTTPCode == 0 && r.HTTPStatus != 0 {
+				g.Failures[idx].HTTPCode = r.HTTPStatus
+			}
+			if r.Latency > g.Failures[idx].Latency {
+				g.Failures[idx].Latency = r.Latency
+			}
+			continue
+		}
+		merged[key] = len(g.Failures)
+		g.Failures = append(g.Failures, Failure{
+			Checks:   []string{r.Check},
+			Status:   r.Status,
+			HTTPCode: r.HTTPStatus,
+			Latency:  r.Latency,
+			Kind:     r.ErrorKind,
+			Error:    r.Error,
+		})
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		switch statusRank(byProvider[name]) {
-		case StatusOK:
-			ok++
-		case StatusFail:
-			fail++
-		default:
-			unsupported++
+	return g
+}
+
+// modelTally folds the batch into model counts per headline verdict, plus the
+// number of providers those models belong to.
+func modelTally(results []Result) (providers, models, ok, fail, unsupported int) {
+	groups := GroupByProvider(results)
+	for _, g := range groups {
+		for _, m := range g.Models {
+			models++
+			switch m.Worst() {
+			case StatusOK:
+				ok++
+			case StatusFail:
+				fail++
+			default:
+				unsupported++
+			}
 		}
 	}
-	return len(names), ok, fail, unsupported
+	return len(groups), models, ok, fail, unsupported
 }
 
 // SummarizeStyled is Summarize with the counts tinted by verdict (ok green,
@@ -142,7 +187,7 @@ func SummarizeStyled(results []Result) string {
 	if len(results) == 0 {
 		return "no results"
 	}
-	providers, ok, fail, unsupported := providerTally(results)
+	providers, models, ok, fail, unsupported := modelTally(results)
 	parts := make([]string, 0, 3)
 	if ok > 0 {
 		parts = append(parts, ui.Success(fmt.Sprintf("%d ok", ok)))
@@ -153,5 +198,14 @@ func SummarizeStyled(results []Result) string {
 	if unsupported > 0 {
 		parts = append(parts, ui.Warn(fmt.Sprintf("%d unsupported", unsupported)))
 	}
-	return fmt.Sprintf("tested %d providers: %s", providers, strings.Join(parts, ", "))
+	return summarizeLine(providers, models) + ": " + strings.Join(parts, ", ")
+}
+
+// summarizeLine names the batch as providers, and adds the model count when a
+// provider carries more than one configured model.
+func summarizeLine(providers, models int) string {
+	if models == providers {
+		return fmt.Sprintf("tested %d providers", providers)
+	}
+	return fmt.Sprintf("tested %d providers, %d models", providers, models)
 }

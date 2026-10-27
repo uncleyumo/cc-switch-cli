@@ -20,10 +20,20 @@ type displayLine struct {
 	Detail string // full error text, quiet gray (may be empty)
 }
 
-// displayGroup is one provider (or MCP server) block.
-type displayGroup struct {
-	Name  string
+// displayModel is one configured model inside a provider group.
+type displayModel struct {
+	Badge string // pre-rendered ✓ / ✗ / ~
+	Label string // "sonnet · claude-sonnet-5-5"
+	Meta  string // dim context: timings or failure reason
 	Lines []displayLine
+}
+
+// displayGroup is one provider (or MCP server) block. Model-test groups carry
+// one displayModel per configured model; MCP groups use Lines directly.
+type displayGroup struct {
+	Name   string
+	Models []displayModel
+	Lines  []displayLine
 }
 
 var (
@@ -55,22 +65,38 @@ func renderTestGroups(summary string, groups []displayGroup, width int) string {
 		b.WriteString("\n")
 		b.WriteString(wrap.Render(groupHeader(g.Name, width)))
 		b.WriteString("\n")
-		for _, l := range g.Lines {
-			line := l.Badge + " " + l.Label
-			if strings.TrimSpace(l.Meta) != "" {
-				line += helpStyle.Render("   " + l.Meta)
+		for _, dm := range g.Models {
+			line := dm.Badge + " " + dm.Label
+			if strings.TrimSpace(dm.Meta) != "" {
+				line += helpStyle.Render("   " + dm.Meta)
 			}
 			b.WriteString(wrap.Render("  " + line))
 			b.WriteString("\n")
-			if strings.TrimSpace(l.Detail) != "" {
-				body := lipgloss.NewStyle().
-					MarginLeft(6).Width(contentWidth(width) - 6).Render(l.Detail)
-				b.WriteString(detailGray.Render(trimTrail(body)))
-				b.WriteString("\n")
-			}
+			renderDisplayLines(&b, dm.Lines, "    ", 8, width)
 		}
+		renderDisplayLines(&b, g.Lines, "  ", 6, width)
 	}
 	return b.String()
+}
+
+// renderDisplayLines writes check rows at the given indent, wrapping detail
+// text to the remaining content width.
+func renderDisplayLines(b *strings.Builder, lines []displayLine, indent string, detailMargin, width int) {
+	wrap := lipgloss.NewStyle().Width(contentWidth(width))
+	for _, l := range lines {
+		line := l.Badge + " " + l.Label
+		if strings.TrimSpace(l.Meta) != "" {
+			line += helpStyle.Render("   " + l.Meta)
+		}
+		b.WriteString(wrap.Render(indent + line))
+		b.WriteString("\n")
+		if strings.TrimSpace(l.Detail) != "" {
+			body := lipgloss.NewStyle().
+				MarginLeft(detailMargin).Width(contentWidth(width) - detailMargin).Render(l.Detail)
+			b.WriteString(detailGray.Render(trimTrail(body)))
+			b.WriteString("\n")
+		}
+	}
 }
 
 // groupHeader renders "── name ─────…" with the rule padded to the content
@@ -88,28 +114,97 @@ func groupHeader(name string, width int) string {
 }
 
 // modelTestGroups converts a model-test batch into grouped display rows using
-// the shared grouping/dedup logic from the tester package.
+// the shared grouping/dedup logic from the tester package. Each configured
+// model gets its own heading and check list under the provider group.
 func modelTestGroups(results []tester.Result) []displayGroup {
 	groups := make([]displayGroup, 0)
 	for _, g := range tester.GroupByProvider(results) {
 		dg := displayGroup{Name: g.Provider}
-		for _, ok := range g.OKs {
-			dg.Lines = append(dg.Lines, displayLine{
-				Badge: statusOK("✓"),
-				Label: ok.Check,
-				Meta: strings.Join(testNonEmpty(
-					"ttft "+renderDur(ok.TTFT),
-					"latency "+renderDur(ok.Latency),
-					renderHTTPShort(ok.HTTPCode),
-				), "  "),
+		for _, mg := range g.Models {
+			lines := modelDisplayLines(mg)
+			if mg.ModelID == "" && mg.Slot == "" {
+				dg.Lines = append(dg.Lines, lines...)
+				continue
+			}
+			dg.Models = append(dg.Models, displayModel{
+				Badge: modelBadge(mg.Worst()),
+				Label: mg.Label(),
+				Meta:  modelMetaText(mg),
+				Lines: lines,
 			})
-		}
-		for _, f := range g.Failures {
-			dg.Lines = append(dg.Lines, failureLine(f))
 		}
 		groups = append(groups, dg)
 	}
 	return groups
+}
+
+// modelBadge maps a model verdict to its glyph.
+func modelBadge(s tester.Status) string {
+	switch s {
+	case tester.StatusOK:
+		return statusOK("✓")
+	case tester.StatusFail:
+		return statusFail("✗")
+	default:
+		return statusWarn("~")
+	}
+}
+
+// modelDisplayLines flattens one model group into rows: passing checks first,
+// then merged failures with their full error body.
+func modelDisplayLines(mg tester.ModelGroup) []displayLine {
+	lines := make([]displayLine, 0, len(mg.OKs)+len(mg.Failures))
+	for _, ok := range mg.OKs {
+		lines = append(lines, displayLine{
+			Badge: statusOK("✓"),
+			Label: ok.Check,
+			Meta: strings.Join(testNonEmpty(
+				"ttft "+renderDur(ok.TTFT),
+				"latency "+renderDur(ok.Latency),
+				renderHTTPShort(ok.HTTPCode),
+			), "  "),
+		})
+	}
+	for _, f := range mg.Failures {
+		lines = append(lines, failureLine(f))
+	}
+	return lines
+}
+
+// modelMetaText summarizes timings for a healthy model, or the first failure's
+// reason/http/latency for a broken one.
+func modelMetaText(mg tester.ModelGroup) string {
+	if len(mg.Failures) > 0 {
+		f := mg.Failures[0]
+		parts := []string{f.Kind.HumanOrTag()}
+		if f.HTTPCode != 0 {
+			parts = append(parts, fmt.Sprintf("http %d", f.HTTPCode))
+		}
+		if f.Latency > 0 {
+			parts = append(parts, renderDur(f.Latency))
+		}
+		return strings.Join(parts, " · ")
+	}
+	var ttft, latency time.Duration
+	for _, ok := range mg.OKs {
+		if ok.Check == "stream" {
+			ttft = ok.TTFT
+		}
+		if ok.Latency > latency {
+			latency = ok.Latency
+		}
+	}
+	if ttft == 0 {
+		for _, ok := range mg.OKs {
+			if ok.TTFT > 0 && (ttft == 0 || ok.TTFT < ttft) {
+				ttft = ok.TTFT
+			}
+		}
+	}
+	return strings.Join(testNonEmpty(
+		"ttft "+renderDur(ttft),
+		"latency "+renderDur(latency),
+	), " · ")
 }
 
 // failureLine tints only the verdict glyph and the reason word; timings and

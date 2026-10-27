@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,14 +24,23 @@ type recordedRequest struct {
 
 func newSSEServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Request, rec *recordedRequest)) (*httptest.Server, *recordedRequest) {
 	rec := &recordedRequest{}
+	var mu sync.Mutex
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rec.authHeader = r.Header.Get("authorization")
-		rec.apiKey = r.Header.Get("x-api-key")
 		body, err := io.ReadAll(r.Body)
-		if err == nil {
-			rec.body = body
+		if err != nil {
+			body = nil
 		}
-		handler(w, r, rec)
+		// Parallel providers hit the same server; hand the handler its own
+		// snapshot and publish the latest one under a lock so -race is clean.
+		snapshot := &recordedRequest{
+			authHeader: r.Header.Get("authorization"),
+			apiKey:     r.Header.Get("x-api-key"),
+			body:       body,
+		}
+		mu.Lock()
+		*rec = *snapshot
+		mu.Unlock()
+		handler(w, r, snapshot)
 	}))
 	t.Cleanup(srv.Close)
 	return srv, rec
@@ -67,6 +77,44 @@ data: {"type":"message_stop"}`,
 	}
 	if rec.authHeader == "" || !strings.HasPrefix(rec.authHeader, "Bearer ") {
 		t.Fatalf("expected Bearer auth by default, got %q", rec.authHeader)
+	}
+}
+
+func TestClientTestsEveryConfiguredModel(t *testing.T) {
+	var got []string
+	srv, _ := newSSEServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		var req messagesRequest
+		_ = json.Unmarshal(rec.body, &req)
+		got = append(got, req.Model)
+		writeSSE(w, []string{
+			`event: message_start
+data: {"type":"message_start","message":{}}`,
+			`event: message_stop
+data: {"type":"message_stop"}`,
+		})
+	})
+	m := &model.Model{Env: model.Env{
+		BaseURL:            srv.URL,
+		AuthToken:          "tok",
+		Model:              "opus",
+		DefaultOpusModel:   "opus-concrete",
+		DefaultSonnetModel: "sonnet-concrete",
+		DefaultHaikuModel:  "sonnet-concrete", // duplicate of sonnet: tested once
+	}}
+	client := NewClient(Options{Checks: CheckStream, Timeout: 5 * time.Second})
+	res := client.TestProvider(context.Background(), "srv", m)
+
+	if len(res) != 2 {
+		t.Fatalf("expected one result per distinct configured model, got %+v", res)
+	}
+	if strings.Join(got, ",") != "opus-concrete,sonnet-concrete" {
+		t.Fatalf("requested models = %v", got)
+	}
+	if res[0].ModelID != "opus-concrete" || res[0].ModelSlot != "default+opus" {
+		t.Errorf("first result = %+v", res[0])
+	}
+	if res[1].ModelID != "sonnet-concrete" || res[1].ModelSlot != "sonnet+haiku" {
+		t.Errorf("second result = %+v", res[1])
 	}
 }
 

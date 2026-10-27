@@ -118,6 +118,32 @@ func TestModelTestGroups(t *testing.T) {
 	}
 }
 
+func TestModelTestGroupsNestsModels(t *testing.T) {
+	results := []tester.Result{
+		{Provider: "p", ModelID: "opus-x", ModelSlot: "default", Check: "stream",
+			Status: tester.StatusOK, TTFT: 120 * time.Millisecond, Latency: 480 * time.Millisecond, HTTPStatus: 200},
+		{Provider: "p", ModelID: "opus-x", ModelSlot: "default", Check: "tool", Status: tester.StatusOK},
+		{Provider: "p", ModelID: "son-x", ModelSlot: "sonnet", Check: "stream",
+			Status: tester.StatusFail, ErrorKind: tester.ErrKindAuth, Error: "http 401: bad key", HTTPStatus: 401},
+	}
+	groups := modelTestGroups(results)
+	if len(groups) != 1 || len(groups[0].Models) != 2 {
+		t.Fatalf("expected one provider with two nested models, got %+v", groups)
+	}
+	if groups[0].Models[0].Label != "default · opus-x" || groups[0].Models[1].Label != "sonnet · son-x" {
+		t.Errorf("nested labels wrong: %+v", groups[0].Models)
+	}
+	if len(groups[0].Models[0].Lines) != 2 || len(groups[0].Models[1].Lines) != 1 {
+		t.Errorf("per-model check rows wrong: %+v", groups[0].Models)
+	}
+	out := renderTestGroups("", groups, 60)
+	for _, want := range []string{"default · opus-x", "sonnet · son-x", "bad key"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered view missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestMCPTestGroups(t *testing.T) {
 	results := []mcptest.Result{
 		{Name: "gh", Scope: "user", Status: mcptest.StatusOK, Transport: "stdio",

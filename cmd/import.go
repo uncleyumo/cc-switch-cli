@@ -18,7 +18,7 @@ var (
 var importCmd = &cobra.Command{
 	Use:   "import <file>",
 	Short: "Import an encrypted ccsc export",
-	Long: `Decrypt and apply a file produced by ccs export.
+	Long: `Decrypt and apply a file produced by ccsc export.
 
 The envelope format is validated before the secret is requested. Existing
 models and user-scope MCP servers are skipped unless --force is set.`,

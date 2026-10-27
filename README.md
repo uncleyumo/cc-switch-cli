@@ -3,8 +3,7 @@
 [English](README.md) | [中文](README_zh.md)
 
 A library of Claude Code provider configs, merged into `~/.claude/settings.json`
-with one command. Single Go binary; rename it to a short name such as **`ccsc`**
-(or **`ccs`**) on your `PATH`.
+with one command. Single Go binary; rename it to **`ccsc`** on your `PATH`.
 
 ```bash
 ccsc use packy-bridge   # switch the global provider (field-merge, atomic, auto-backup)
@@ -100,10 +99,10 @@ ccsc (cc-switch-cli)
 │  ├─ edit [name]                structured / raw JSON editor
 │  ├─ rename <old> <new>
 │  ├─ remove, rm <name> [-y]
-│  ├─ test [name...]             streaming + tool checks (see below)
+│  ├─ test [name...]             streaming + tool checks for every configured model
 │  │   --stream / --tool         run one check only
 │  │   --timeout 30s  --concurrency 4  --auth auto|bearer|x-api-key
-│  ├─ doctor                     show resolved vs on-the-wire model id (read-only)
+│  ├─ doctor                     show every configured model, resolved vs on the wire (read-only)
 │  └─ tui                        explicit manager (same as bare `model`)
 ├─ mcp                           MCP manager TUI (no subcommand)
 │  ├─ list, ls [--scope S]       list servers (user / local / project)
@@ -130,7 +129,7 @@ ccsc (cc-switch-cli)
 
 ```bash
 ccsc model add my-proxy           # template + open the editor
-ccsc model test                   # availability-check every provider
+ccsc model test                   # availability-check every configured model
 ccsc use my-proxy                 # activate globally
 cd my-project && ccsc local my-proxy   # scope it to one project
 ccsc local show                        # project-level model + MCP
@@ -159,9 +158,10 @@ If a provider is literally named `clear` or `show`, write it with `ccsc local --
 
 ## `ccsc model test` — availability
 
-Runs real Anthropic Messages calls (streaming + a tool-call probe), so expect a
-small token cost. Results are cached in `~/.cc-switch-cli/test-status.json` and
-shown per model in `ccsc model list`.
+Runs real Anthropic Messages calls (streaming + a tool-call probe) for every
+configured model id in each provider, so expect a small token cost. Results are
+cached in `~/.cc-switch-cli/test-status.json`; `ccsc model list` shows the
+provider's worst verdict plus its model count.
 
 | Status | Meaning |
 |---|---|

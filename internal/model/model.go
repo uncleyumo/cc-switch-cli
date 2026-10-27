@@ -23,6 +23,7 @@ const (
 	EnvAPIKey             = "ANTHROPIC_API_KEY"
 	EnvBaseURL            = "ANTHROPIC_BASE_URL"
 	EnvModel              = "ANTHROPIC_MODEL"
+	EnvDefaultFableModel  = "ANTHROPIC_DEFAULT_FABLE_MODEL"
 	EnvDefaultHaikuModel  = "ANTHROPIC_DEFAULT_HAIKU_MODEL"
 	EnvDefaultOpusModel   = "ANTHROPIC_DEFAULT_OPUS_MODEL"
 	EnvDefaultSonnetModel = "ANTHROPIC_DEFAULT_SONNET_MODEL"
@@ -53,6 +54,7 @@ type Env struct {
 	APIKey             string
 	BaseURL            string
 	Model              string
+	DefaultFableModel  string
 	DefaultHaikuModel  string
 	DefaultOpusModel   string
 	DefaultSonnetModel string
@@ -77,6 +79,7 @@ func (e Env) MarshalJSON() ([]byte, error) {
 		{EnvAPIKey, e.APIKey},
 		{EnvBaseURL, e.BaseURL},
 		{EnvModel, e.Model},
+		{EnvDefaultFableModel, e.DefaultFableModel},
 		{EnvDefaultHaikuModel, e.DefaultHaikuModel},
 		{EnvDefaultOpusModel, e.DefaultOpusModel},
 		{EnvDefaultSonnetModel, e.DefaultSonnetModel},
@@ -161,6 +164,9 @@ func (e *Env) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if err := typedString(EnvModel, &e.Model); err != nil {
+		return err
+	}
+	if err := typedString(EnvDefaultFableModel, &e.DefaultFableModel); err != nil {
 		return err
 	}
 	if err := typedString(EnvDefaultHaikuModel, &e.DefaultHaikuModel); err != nil {
@@ -249,9 +255,10 @@ func (m *Model) TopLevelModel() string {
 	return ""
 }
 
-// ModelID picks the model identifier used for availability testing.
+// ModelID picks the primary model identifier for this provider.
 // Order of preference: ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_SONNET_MODEL,
-// ANTHROPIC_DEFAULT_OPUS_MODEL, ANTHROPIC_DEFAULT_HAIKU_MODEL.
+// ANTHROPIC_DEFAULT_OPUS_MODEL, ANTHROPIC_DEFAULT_HAIKU_MODEL,
+// ANTHROPIC_DEFAULT_FABLE_MODEL.
 func (m *Model) ModelID() string {
 	if m == nil {
 		return ""
@@ -261,12 +268,77 @@ func (m *Model) ModelID() string {
 		m.Env.DefaultSonnetModel,
 		m.Env.DefaultOpusModel,
 		m.Env.DefaultHaikuModel,
+		m.Env.DefaultFableModel,
 	} {
 		if s != "" {
 			return s
 		}
 	}
 	return ""
+}
+
+// ModelTarget is one configured model inside a provider config. A provider can
+// carry several slots (the default model plus the per-tier defaults), and each
+// slot may point at a different model.
+type ModelTarget struct {
+	// Slot names the config slot(s) that point at this model. When several
+	// slots resolve to the same wire id they are joined with "+", e.g.
+	// "sonnet+haiku", so the config's intent stays visible while the model is
+	// still tested only once.
+	Slot string
+	// ID is the resolved model id as stored in the config, including any
+	// trailing context-window marker such as "[1m]".
+	ID string
+	// WireID is the id actually sent in the request body (marker stripped).
+	WireID string
+}
+
+// Targets returns every distinct configured model across the provider's slots,
+// in a stable order: default, top-level, fable, opus, sonnet, haiku. Tier
+// aliases are resolved through the matching ANTHROPIC_DEFAULT_*_MODEL value.
+// Slots that resolve to the same wire id are tested once, but every slot name
+// is kept in Slot (joined with "+") so merged entries still show where they
+// came from.
+func (m *Model) Targets() []ModelTarget {
+	if m == nil {
+		return nil
+	}
+	type slot struct {
+		name  string
+		value string
+	}
+	slots := []slot{
+		{"default", m.Env.Model},
+		{"top-level", m.TopLevelModel()},
+		{"fable", m.Env.DefaultFableModel},
+		{"opus", m.Env.DefaultOpusModel},
+		{"sonnet", m.Env.DefaultSonnetModel},
+		{"haiku", m.Env.DefaultHaikuModel},
+	}
+	index := map[string]int{}
+	targets := make([]ModelTarget, 0, len(slots))
+	for _, s := range slots {
+		v := SanitizeModelID(s.value)
+		if v == "" {
+			continue
+		}
+		if _, isTier := tierAliases[strings.ToLower(v)]; isTier {
+			if resolved := SanitizeModelID(m.defaultForTier(v)); resolved != "" {
+				v = resolved
+			}
+		}
+		wire := WireModelID(v)
+		if wire == "" {
+			continue
+		}
+		if i, seen := index[wire]; seen {
+			targets[i].Slot += "+" + s.name
+			continue
+		}
+		index[wire] = len(targets)
+		targets = append(targets, ModelTarget{Slot: s.name, ID: v, WireID: wire})
+	}
+	return targets
 }
 
 // Token returns the effective authentication token, preferring
@@ -335,7 +407,7 @@ var (
 	// it only on the wire (see WireModelID). It is preserved verbatim in the
 	// stored config, so a plain SanitizeModelID must leave it alone.
 	reContextWindow = regexp.MustCompile(`\[\d+[kKmM]\]\s*$`)
-		re1mMarker      = regexp.MustCompile(`(?i)\[1m\]\s*$`)
+	re1mMarker      = regexp.MustCompile(`(?i)\[1m\]\s*$`)
 )
 
 // SanitizeModelID strips only genuine ANSI escape sequences (real ESC bytes)
@@ -541,6 +613,7 @@ func (m *Model) HasAny1MMarker() bool {
 	}
 	for _, s := range []string{
 		m.Env.Model,
+		m.Env.DefaultFableModel,
 		m.Env.DefaultHaikuModel,
 		m.Env.DefaultOpusModel,
 		m.Env.DefaultSonnetModel,
@@ -572,6 +645,7 @@ func LooksLikeClaudeModel(id string) bool {
 // tierAliases are the Claude Code model tier names that must be resolved to a
 // concrete model via the matching ANTHROPIC_DEFAULT_*_MODEL value.
 var tierAliases = map[string]struct{}{
+	"fable":  {},
 	"opus":   {},
 	"sonnet": {},
 	"haiku":  {},
@@ -580,6 +654,8 @@ var tierAliases = map[string]struct{}{
 // defaultForTier returns the configured default model for a tier alias.
 func (m *Model) defaultForTier(tier string) string {
 	switch strings.ToLower(tier) {
+	case "fable":
+		return m.Env.DefaultFableModel
 	case "opus":
 		return m.Env.DefaultOpusModel
 	case "sonnet":
@@ -621,7 +697,7 @@ func (m *Model) ResolvedModelID() string {
 	if r := resolve(m.TopLevelModel()); r != "" {
 		return r
 	}
-	for _, v := range []string{m.Env.DefaultSonnetModel, m.Env.DefaultOpusModel, m.Env.DefaultHaikuModel} {
+	for _, v := range []string{m.Env.DefaultSonnetModel, m.Env.DefaultOpusModel, m.Env.DefaultHaikuModel, m.Env.DefaultFableModel} {
 		if s := SanitizeModelID(v); s != "" {
 			return s
 		}
@@ -652,6 +728,7 @@ func (m *Model) Sanitize() bool {
 		}
 	}
 	clean(m.Env.Model, func(s string) { m.Env.Model = s })
+	clean(m.Env.DefaultFableModel, func(s string) { m.Env.DefaultFableModel = s })
 	clean(m.Env.DefaultHaikuModel, func(s string) { m.Env.DefaultHaikuModel = s })
 	clean(m.Env.DefaultOpusModel, func(s string) { m.Env.DefaultOpusModel = s })
 	clean(m.Env.DefaultSonnetModel, func(s string) { m.Env.DefaultSonnetModel = s })

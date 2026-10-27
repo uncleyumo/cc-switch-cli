@@ -4,7 +4,7 @@
 
 把 Claude Code 的模型提供商配置收成库，一条命令原子切换到
 `~/.claude/settings.json`。单文件 Go 二进制；放到 `PATH` 后可改名为 **`ccsc`**
-（或 **`ccs`**）方便使用。
+方便使用。
 
 ```bash
 ccsc use packy-bridge   # 切换全局提供商（字段合并，原子写入，自动备份）
@@ -97,10 +97,10 @@ ccsc (cc-switch-cli)
 │  ├─ edit [name]                结构化 / 原始 JSON 编辑器
 │  ├─ rename <old> <new>
 │  ├─ remove, rm <name> [-y]
-│  ├─ test [name...]             流式 + 工具探测（见下文）
+│  ├─ test [name...]             对每个已配置的模型做流式 + 工具探测
 │  │   --stream / --tool         只跑其中一项
 │  │   --timeout 30s  --concurrency 4  --auth auto|bearer|x-api-key
-│  ├─ doctor                     打印解析后 / 实际上线的 model id（只读）
+│  ├─ doctor                     打印每个已配置模型的解析结果 / 实际上线 id（只读）
 │  └─ tui                        显式打开管理器（等同裸 `model`）
 ├─ mcp                           MCP 管理器 TUI（无子命令时）
 │  ├─ list, ls [--scope S]       列出服务器（user / local / project）
@@ -127,7 +127,7 @@ ccsc (cc-switch-cli)
 
 ```bash
 ccsc model add my-proxy           # 模板 + 打开编辑器
-ccsc model test                   # 对每个提供商做可用性检查
+ccsc model test                   # 对每个提供商里的每个已配置模型做可用性检查
 ccsc use my-proxy                 # 全局激活
 cd my-project && ccsc local my-proxy   # 仅作用于当前项目
 ccsc local show                        # 查看项目级模型 + MCP
@@ -156,8 +156,8 @@ MCP、未知键等）。
 
 ## `ccsc model test` — 可用性
 
-会真实调用 Anthropic Messages（流式 + tool-call 探测），会有少量 token 消耗。
-结果缓存到 `~/.cc-switch-cli/test-status.json`，并在 `ccsc model list` 中展示。
+会对每个提供商里每个已配置的 model id 真实调用 Anthropic Messages（流式 + tool-call 探测），会有少量 token 消耗。
+结果缓存到 `~/.cc-switch-cli/test-status.json`；`ccsc model list` 显示该提供商最差的模型结论和模型数量。
 
 | 状态 | 含义 |
 |---|---|

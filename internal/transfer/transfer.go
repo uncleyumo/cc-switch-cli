@@ -16,7 +16,7 @@ const (
 	FormatVersion = 1
 	// AppID identifies this tool inside export envelopes.
 	AppID = "cc-switch-cli"
-	// KindExport marks envelopes produced by `ccs export`.
+	// KindExport marks envelopes produced by `ccsc export`.
 	KindExport = "ccsc-export"
 	// CipherAESGCM is the supported payload cipher.
 	CipherAESGCM = "AES-256-GCM"

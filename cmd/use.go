@@ -44,7 +44,7 @@ func resolveModelArg(args []string, action string) (string, error) {
 		return "", err
 	}
 	if len(names) == 0 {
-		return "", errors.New("no models found: add one with `ccs model add <name>`")
+		return "", errors.New("no models found: add one with `ccsc model add <name>`")
 	}
 	current, _ := manager.GetCurrentProvider()
 	title := "Choose a model to " + action

@@ -70,9 +70,9 @@ func SaveStatus(sf *StatusFile) error {
 	return fsutil.AtomicWrite(path, append(data, '\n'), 0o644)
 }
 
-// Upsert folds a fresh batch of Results into the cache. When a provider has
-// multiple results (stream + tool), we collapse to the worst status so
-// `model list` shows a single, honest verdict.
+// Upsert folds a fresh batch of Results into the cache. Each configured model
+// is collapsed to its own verdict first, then the provider takes the worst
+// model verdict so `model list` shows a single, honest headline.
 func (sf *StatusFile) Upsert(results []Result) {
 	if sf.Results == nil {
 		sf.Results = map[string]ProviderStatus{}
@@ -83,7 +83,23 @@ func (sf *StatusFile) Upsert(results []Result) {
 		byProvider[r.Provider] = append(byProvider[r.Provider], r)
 	}
 	for name, rs := range byProvider {
-		worst := statusRank(rs)
+		// Collapse each configured model separately first, then take the worst
+		// model verdict: one dead tier must not be hidden by another tier.
+		byModel := map[string][]Result{}
+		var modelOrder []string
+		for _, r := range rs {
+			if _, seen := byModel[r.ModelID]; !seen {
+				modelOrder = append(modelOrder, r.ModelID)
+			}
+			byModel[r.ModelID] = append(byModel[r.ModelID], r)
+		}
+		worst := StatusOK
+		for _, id := range modelOrder {
+			worst = worseStatus(worst, rankChecks(byModel[id]))
+		}
+		if len(modelOrder) == 0 {
+			worst = StatusUnsupported
+		}
 		latency := time.Duration(0)
 		ttft := time.Duration(0)
 		httpCode := 0
@@ -102,6 +118,9 @@ func (sf *StatusFile) Upsert(results []Result) {
 			}
 			if errMsg == "" && r.Status != StatusOK && r.Error != "" {
 				errMsg = r.Error
+				if r.ModelID != "" {
+					errMsg = r.ModelID + ": " + errMsg
+				}
 				errKind = r.ErrorKind
 			}
 			if checks == "" {
@@ -111,29 +130,48 @@ func (sf *StatusFile) Upsert(results []Result) {
 			}
 		}
 		sf.Results[name] = ProviderStatus{
-			Status:    worst,
-			Checks:    checks,
-			LatencyMS: latency.Milliseconds(),
-			TTFTMS:    ttft.Milliseconds(),
-			HTTPCode:  httpCode,
-			Error:     errMsg,
-			ErrorKind: errKind,
-			TestedAt:  now,
+			Status:     worst,
+			ModelCount: len(modelOrder),
+			Checks:     checks,
+			LatencyMS:  latency.Milliseconds(),
+			TTFTMS:     ttft.Milliseconds(),
+			HTTPCode:   httpCode,
+			Error:      errMsg,
+			ErrorKind:  errKind,
+			TestedAt:   now,
 		}
 	}
 }
 
-// statusRank collapses a provider's per-check results into a single headline
-// verdict. Streaming is the source of truth for availability: a provider is
-// considered available as long as its stream check passed. The tool check is a
-// secondary capability signal that can only DOWNGRADE an available provider to
-// "unsupported" (OK~) — it can never turn a stream-working provider into FAIL.
+// worseStatus returns the more severe of two verdicts (fail > unsupported > ok).
+func worseStatus(a, b Status) Status {
+	rank := func(s Status) int {
+		switch s {
+		case StatusFail:
+			return 2
+		case StatusUnsupported:
+			return 1
+		default:
+			return 0
+		}
+	}
+	if rank(b) > rank(a) {
+		return b
+	}
+	return a
+}
+
+// rankChecks collapses one model's checks into a single headline verdict.
+// Streaming is the source of truth for availability: a model is considered
+// available as long as its stream check passed. The tool check is a secondary
+// capability signal that can only DOWNGRADE an available model to
+// "unsupported" (OK~) — it can never turn a stream-working model into FAIL.
 // This matters because a tool probe may fail for reasons unrelated to whether
-// the provider is usable (a forced-call directive the gateway rejects, or a
+// the model is usable (a forced-call directive the gateway rejects, or a
 // transient 5xx/timeout on the tool request); in both cases streaming still
-// works, so the provider must stay out of the FAIL bucket. A provider is FAIL
-// only when no check passed (i.e. streaming itself failed).
-func statusRank(rs []Result) Status {
+// works, so the model must stay out of the FAIL bucket. A model is FAIL only
+// when no check passed (i.e. streaming itself failed).
+func rankChecks(rs []Result) Status {
 	hasOK := false
 	hasFail := false
 	hasNonOK := false

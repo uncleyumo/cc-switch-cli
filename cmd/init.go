@@ -50,8 +50,8 @@ var initCmd = &cobra.Command{
 		fmt.Println()
 		fmt.Println("Next steps:")
 		fmt.Printf("  1. Drop provider JSON files under %s\n", modelsDir)
-		fmt.Println("  2. Run `ccs model list` to inspect them")
-		fmt.Println("  3. Run `ccs use <name>` to activate one, or `ccs model` for the TUI")
+		fmt.Println("  2. Run `ccsc model list` to inspect them")
+		fmt.Println("  3. Run `ccsc use <name>` to activate one, or `ccsc model` for the TUI")
 		return nil
 	},
 }

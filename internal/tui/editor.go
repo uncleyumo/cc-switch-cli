@@ -77,6 +77,7 @@ func newEditorModel(name string, m *model.Model) (editorModel, error) {
 		{label: "ANTHROPIC_API_KEY", envKey: model.EnvAPIKey, secret: true, input: newInput(m.Env.APIKey, true)},
 		{label: "ANTHROPIC_BASE_URL", envKey: model.EnvBaseURL, input: newInput(m.Env.BaseURL, false)},
 		{label: "ANTHROPIC_MODEL", envKey: model.EnvModel, input: newInput(m.Env.Model, false)},
+		{label: "ANTHROPIC_DEFAULT_FABLE_MODEL", envKey: model.EnvDefaultFableModel, input: newInput(m.Env.DefaultFableModel, false)},
 		{label: "ANTHROPIC_DEFAULT_HAIKU_MODEL", envKey: model.EnvDefaultHaikuModel, input: newInput(m.Env.DefaultHaikuModel, false)},
 		{label: "ANTHROPIC_DEFAULT_OPUS_MODEL", envKey: model.EnvDefaultOpusModel, input: newInput(m.Env.DefaultOpusModel, false)},
 		{label: "ANTHROPIC_DEFAULT_SONNET_MODEL", envKey: model.EnvDefaultSonnetModel, input: newInput(m.Env.DefaultSonnetModel, false)},
@@ -240,11 +241,12 @@ func (m *editorModel) syncRawToStructured() error {
 	m.fields[1].input.SetValue(parsed.Env.APIKey)
 	m.fields[2].input.SetValue(parsed.Env.BaseURL)
 	m.fields[3].input.SetValue(parsed.Env.Model)
-	m.fields[4].input.SetValue(parsed.Env.DefaultHaikuModel)
-	m.fields[5].input.SetValue(parsed.Env.DefaultOpusModel)
-	m.fields[6].input.SetValue(parsed.Env.DefaultSonnetModel)
-	m.fields[7].input.SetValue(parsed.TopLevelModel())
-	m.fields[8].input.SetValue(model.FormatContextWindow(parsed.Env.ContextWindowTokens()))
+	m.fields[4].input.SetValue(parsed.Env.DefaultFableModel)
+	m.fields[5].input.SetValue(parsed.Env.DefaultHaikuModel)
+	m.fields[6].input.SetValue(parsed.Env.DefaultOpusModel)
+	m.fields[7].input.SetValue(parsed.Env.DefaultSonnetModel)
+	m.fields[8].input.SetValue(parsed.TopLevelModel())
+	m.fields[9].input.SetValue(model.FormatContextWindow(parsed.Env.ContextWindowTokens()))
 	return nil
 }
 
@@ -265,6 +267,8 @@ func (m *editorModel) applyFieldsToModel() error {
 			env.BaseURL = val
 		case model.EnvModel:
 			env.Model = val
+		case model.EnvDefaultFableModel:
+			env.DefaultFableModel = val
 		case model.EnvDefaultHaikuModel:
 			env.DefaultHaikuModel = val
 		case model.EnvDefaultOpusModel:
@@ -304,6 +308,36 @@ func (m *editorModel) applyAndSave() error {
 	return model.Save(m.name, m.model)
 }
 
+// topLevelState returns the live ANTHROPIC_MODEL and top-level `model` form
+// values, so the view can explain which one will actually win.
+func (m editorModel) topLevelState() (envModel, topLevel string) {
+	for _, f := range m.fields {
+		switch {
+		case f.envKey == model.EnvModel:
+			envModel = strings.TrimSpace(f.input.Value())
+		case f.restKey == "model":
+			topLevel = strings.TrimSpace(f.input.Value())
+		}
+	}
+	return envModel, topLevel
+}
+
+// topLevelModelHint explains what the top-level `model` field does in the
+// current form state. The warn result is true when ANTHROPIC_MODEL is also set,
+// because Claude Code gives the env var priority at startup.
+func topLevelModelHint(envModel, topLevel string) (hint string, warn bool) {
+	switch {
+	case envModel != "" && topLevel != "":
+		return "overridden by ANTHROPIC_MODEL; leave this empty when using the env var", true
+	case topLevel != "":
+		return "used only when ANTHROPIC_MODEL is empty (alias or full model id)", false
+	case envModel != "":
+		return "optional; ANTHROPIC_MODEL is already set, so this can stay empty", false
+	default:
+		return "optional; without it Claude Code falls back to ANTHROPIC_MODEL or its default model", false
+	}
+}
+
 func (m editorModel) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(fmt.Sprintf("Edit model: %s", m.name)))
@@ -313,14 +347,29 @@ func (m editorModel) View() string {
 		b.WriteString(m.raw.View())
 		b.WriteByte('\n')
 	} else {
+		envModel, topLevel := m.topLevelState()
+		overridden := envModel != "" && topLevel != ""
 		for i, f := range m.fields {
 			labelStyle := lipgloss.NewStyle().Width(34)
 			if i == m.focused {
 				labelStyle = labelStyle.Foreground(lipgloss.Color("212")).Bold(true)
 			}
-			b.WriteString(labelStyle.Render(f.label))
+			label := f.label
+			if f.restKey == "model" && overridden {
+				label += " (overridden)"
+			}
+			b.WriteString(labelStyle.Render(label))
 			b.WriteString(f.input.View())
 			b.WriteByte('\n')
+			if i == m.focused && f.restKey == "model" {
+				hint, warn := topLevelModelHint(envModel, topLevel)
+				if warn {
+					b.WriteString("  " + statusWarn(hint))
+				} else {
+					b.WriteString("  " + helpStyle.Render(hint))
+				}
+				b.WriteByte('\n')
+			}
 		}
 	}
 

@@ -4,54 +4,36 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
 	"golang.org/x/term"
 
 	"cc-switch-cli/internal/ui"
 )
 
-// PrintResults renders a lipgloss table of the test results to w, followed by
-// a grouped detail section: one block per provider, identical errors merged,
-// full messages in quiet gray so color marks only the verdicts.
+// PrintResults renders the batch to w: one summary line, then one block per
+// provider and, inside it, one block per configured model with its own verdict
+// and full check detail. Full error messages stay in quiet gray so color marks
+// only the verdicts.
 func PrintResults(w io.Writer, results []Result) {
-	rows := make([][]string, 0, len(results))
-	for _, r := range results {
-		rows = append(rows, []string{
-			r.Provider,
-			r.Check,
-			renderStatus(r.Status),
-			renderDuration(r.TTFT),
-			renderDuration(r.Latency),
-			renderHTTP(r.HTTPStatus),
-			renderError(r),
-		})
-	}
-	t := table.New().
-		Border(lipgloss.NormalBorder()).
-		BorderStyle(lipgloss.NewStyle().Faint(true)).
-		Headers("MODEL", "CHECK", "STATUS", "TTFT", "LATENCY", "HTTP", "ERROR").
-		Rows(rows...).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			if row == table.HeaderRow {
-				return lipgloss.NewStyle().Bold(true).Padding(0, 1)
-			}
-			return lipgloss.NewStyle().Padding(0, 1)
-		})
-	fmt.Fprintln(w, t.Render())
 	fmt.Fprintln(w, SummarizeStyled(results))
+	if len(results) == 0 {
+		return
+	}
 	fmt.Fprintln(w, renderGroups(GroupByProvider(results), terminalWidth()))
 }
 
 // renderGroups draws one block per provider:
 //
 //	── mimo ─────────────────────────────
-//	  ✗ stream + tool  auth error · http 402 · 165ms
-//	      Insufficient account balance
+//	  ✓ default · claude-opus-5-5   ttft 210ms · latency 1.1s
+//	      ✓ stream   ttft 210ms · latency 1.1s · http 200
+//	      ✓ tool     ttft 180ms · latency 900ms · http 200
+//	  ✗ sonnet · claude-sonnet-5-5  auth error · http 401
+//	      ✗ stream + tool   auth error · http 401
+//	          Insufficient account balance
 func renderGroups(groups []ProviderGroup, width int) string {
 	var b strings.Builder
 	for gi, g := range groups {
@@ -60,27 +42,95 @@ func renderGroups(groups []ProviderGroup, width int) string {
 		}
 		b.WriteString(groupHeader(g.Provider, width))
 		b.WriteString("\n")
-		for _, l := range g.OKs {
-			meta := strings.Join(testNonEmpty(
-				"ttft "+renderDuration(l.TTFT),
-				"latency "+renderDuration(l.Latency),
-				renderHTTPShort(l.HTTPCode),
-			), "  ")
-			line := ui.Success("✓") + " " + l.Check
-			if meta != "" {
-				line += ui.Dim("   " + meta)
+		for _, mg := range g.Models {
+			if mg.Label() == "" {
+				renderModelLines(&b, mg, "  ", width)
+				continue
 			}
-			b.WriteString("  " + line + "\n")
-		}
-		for _, f := range g.Failures {
-			b.WriteString("  " + renderFailureLine(f) + "\n")
-			if msg := strings.TrimSpace(f.Error); msg != "" {
-				wrap := lipgloss.NewStyle().Width(maxInt(width-8, 20)).MarginLeft(6)
-				b.WriteString(ui.Dim(trimTrail(wrap.Render(msg))) + "\n")
-			}
+			b.WriteString(renderModelHeader(mg))
+			b.WriteString("\n")
+			renderModelLines(&b, mg, "    ", width)
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderModelHeader is the one-line verdict for one configured model, with its
+// best timings when it works or the failure reason when it does not.
+func renderModelHeader(mg ModelGroup) string {
+	badge := ui.Success("✓")
+	if mg.Worst() == StatusUnsupported {
+		badge = ui.Warn("~")
+	} else if mg.Worst() == StatusFail {
+		badge = ui.Fail("✗")
+	}
+	line := "  " + badge + " " + ui.Bold(mg.Label())
+	if meta := modelMeta(mg); meta != "" {
+		line += ui.Dim("   " + meta)
+	}
+	return line
+}
+
+// modelMeta summarizes timings for a healthy model, or the first failure's
+// reason/http/latency for a broken one.
+func modelMeta(mg ModelGroup) string {
+	if len(mg.Failures) > 0 {
+		f := mg.Failures[0]
+		parts := []string{f.Kind.HumanOrTag()}
+		if f.HTTPCode != 0 {
+			parts = append(parts, "http "+itoaHTTP(f.HTTPCode))
+		}
+		if f.Latency > 0 {
+			parts = append(parts, f.Latency.Round(time.Millisecond).String())
+		}
+		return strings.Join(parts, " · ")
+	}
+	var ttft time.Duration
+	var latency time.Duration
+	for _, ok := range mg.OKs {
+		// Stream is the availability signal; prefer its TTFT over the tool
+		// probe's when both passed.
+		if ok.Check == "stream" {
+			ttft = ok.TTFT
+		}
+		if ok.Latency > latency {
+			latency = ok.Latency
+		}
+	}
+	if ttft == 0 {
+		for _, ok := range mg.OKs {
+			if ok.TTFT > 0 && (ttft == 0 || ok.TTFT < ttft) {
+				ttft = ok.TTFT
+			}
+		}
+	}
+	return strings.Join(testNonEmpty(
+		"ttft "+renderDuration(ttft),
+		"latency "+renderDuration(latency),
+	), " · ")
+}
+
+// renderModelLines writes the per-check rows for one model at the given indent.
+func renderModelLines(b *strings.Builder, mg ModelGroup, indent string, width int) {
+	for _, l := range mg.OKs {
+		meta := strings.Join(testNonEmpty(
+			"ttft "+renderDuration(l.TTFT),
+			"latency "+renderDuration(l.Latency),
+			renderHTTPShort(l.HTTPCode),
+		), " · ")
+		line := indent + ui.Success("✓") + " " + l.Check
+		if meta != "" {
+			line += ui.Dim("   " + meta)
+		}
+		b.WriteString(line + "\n")
+	}
+	for _, f := range mg.Failures {
+		b.WriteString(indent + renderFailureLine(f) + "\n")
+		if msg := strings.TrimSpace(f.Error); msg != "" {
+			wrap := lipgloss.NewStyle().Width(maxInt(width-len(indent)-6, 20)).MarginLeft(len(indent) + 2)
+			b.WriteString(ui.Dim(trimTrail(wrap.Render(msg))) + "\n")
+		}
+	}
 }
 
 // groupHeader renders "── name ─────…" faint, with the name bold and the rule
@@ -110,6 +160,9 @@ func renderFailureLine(f Failure) string {
 	}
 	if f.HTTPCode != 0 {
 		parts = append(parts, ui.Dim("http "+itoaHTTP(f.HTTPCode)))
+	}
+	if f.Latency > 0 {
+		parts = append(parts, ui.Dim(f.Latency.Round(time.Millisecond).String()))
 	}
 	return badge + " " + strings.Join(parts, ui.Dim(" · "))
 }
@@ -145,40 +198,18 @@ func trimTrail(s string) string {
 	return strings.Join(lines, "\n")
 }
 
-// Summarize folds the batch into one headline line with per-provider verdicts:
+// Summarize folds the batch into one headline line with per-model verdicts:
 // "tested 5 providers: 3 ok, 1 fail, 1 unsupported".
 func Summarize(results []Result) string {
 	if len(results) == 0 {
 		return "no results"
 	}
-	ok := 0
-	fail := 0
-	unsupported := 0
-	byProvider := map[string][]Result{}
-	names := make([]string, 0, len(results))
-	for _, r := range results {
-		if _, seen := byProvider[r.Provider]; !seen {
-			names = append(names, r.Provider)
-		}
-		byProvider[r.Provider] = append(byProvider[r.Provider], r)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		switch statusRank(byProvider[name]) {
-		case StatusOK:
-			ok++
-		case StatusFail:
-			fail++
-		default:
-			unsupported++
-		}
-	}
+	providers, models, ok, fail, unsupported := modelTally(results)
 	var parts []string
 	parts = appendCount(parts, "ok", ok)
 	parts = appendCount(parts, "fail", fail)
 	parts = appendCount(parts, "unsupported", unsupported)
-	return fmt.Sprintf("tested %d providers: %s",
-		len(names), strings.Join(parts, ", "))
+	return summarizeLine(providers, models) + ": " + strings.Join(parts, ", ")
 }
 
 func appendCount(parts []string, label string, n int) []string {
@@ -217,31 +248,11 @@ func (k ErrorKind) HumanOrTag() string {
 	return "error"
 }
 
-func renderStatus(s Status) string {
-	switch s {
-	case StatusOK:
-		return ui.Success(strings.ToUpper(string(s)))
-	case StatusFail:
-		return ui.Fail(strings.ToUpper(string(s)))
-	case StatusUnsupported:
-		return ui.Warn(strings.ToUpper(string(s)))
-	default:
-		return string(s)
-	}
-}
-
 func renderDuration(d time.Duration) string {
 	if d <= 0 {
 		return "-"
 	}
 	return d.Round(time.Millisecond).String()
-}
-
-func renderHTTP(code int) string {
-	if code == 0 {
-		return "-"
-	}
-	return fmt.Sprintf("%d", code)
 }
 
 // truncate cuts s to at most n runes (never bytes), keeping multi-byte text

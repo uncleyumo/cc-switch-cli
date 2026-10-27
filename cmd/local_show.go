@@ -74,6 +74,9 @@ func printLocalModel(snap *manager.LocalSnapshot) {
 	printKV("model", dash(m.TopLevelModel()))
 	printKV("group", localGroupDisplay(snap))
 	printKV("env model", dash(m.Env.Model))
+	if fable := m.Env.DefaultFableModel; fable != "" {
+		printKV("default fable", fable)
+	}
 	if haiku := m.Env.DefaultHaikuModel; haiku != "" {
 		printKV("default haiku", haiku)
 	}

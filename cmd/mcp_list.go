@@ -38,7 +38,7 @@ var mcpListCmd = &cobra.Command{
 			return err
 		}
 		if len(entries) == 0 {
-			fmt.Println("(no MCP servers; add one with `ccs mcp add <name> -- <command>`)")
+			fmt.Println("(no MCP servers; add one with `ccsc mcp add <name> -- <command>`)")
 			return nil
 		}
 		status, _ := mcptest.LoadStatus()

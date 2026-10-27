@@ -31,7 +31,7 @@ In a terminal with no --models/--mcps flags, opens a checklist selector.
 Otherwise --models and --mcps accept "all", "none" or a comma-separated list.
 
 The secret is prompted interactively (confirmed), or read from --secret-file
-("-" = stdin). The resulting file can be imported with ccs import.`,
+("-" = stdin). The resulting file can be imported with ccsc import.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		modelNames, err := model.List()

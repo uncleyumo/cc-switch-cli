@@ -228,6 +228,13 @@ func buildManagerItems(names []string, current string, status *tester.StatusFile
 						item.tokenDim = "last test: " + s.TestedAt
 					}
 				}
+				if s.ModelCount > 1 {
+					if item.tokenDim == "" {
+						item.tokenDim = fmt.Sprintf("%d models", s.ModelCount)
+					} else {
+						item.tokenDim = fmt.Sprintf("%d models · %s", s.ModelCount, item.tokenDim)
+					}
+				}
 			}
 		}
 		items = append(items, item)

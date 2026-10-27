@@ -191,6 +191,63 @@ func TestResolvedModelID(t *testing.T) {
 	}
 }
 
+func TestTargetsCoversEveryConfiguredModel(t *testing.T) {
+	m := &Model{Env: Env{
+		Model:              "opus",
+		DefaultFableModel:  "claude-fable-5-1",
+		DefaultOpusModel:   "claude-opus-5-5[1m]",
+		DefaultSonnetModel: "claude-sonnet-5-5",
+		DefaultHaikuModel:  "claude-haiku-5-5",
+	}}
+	targets := m.Targets()
+	if len(targets) != 4 {
+		t.Fatalf("expected 4 distinct targets, got %+v", targets)
+	}
+	wantSlots := []string{"default+opus", "fable", "sonnet", "haiku"}
+	wantIDs := []string{"claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"}
+	for i, target := range targets {
+		if target.Slot != wantSlots[i] {
+			t.Errorf("target %d slot = %q, want %q", i, target.Slot, wantSlots[i])
+		}
+		if target.WireID != wantIDs[i] {
+			t.Errorf("target %d wire id = %q, want %q", i, target.WireID, wantIDs[i])
+		}
+	}
+	if targets[0].ID != "claude-opus-5-5[1m]" {
+		t.Errorf("stored id should keep the context marker, got %q", targets[0].ID)
+	}
+
+	// Several slots pointing at the same model are tested once, and the first
+	// slot's label wins.
+	m = &Model{Env: Env{
+		Model:              "deepseek-v4-pro[1m]",
+		DefaultOpusModel:   "deepseek-v4-pro[1m]",
+		DefaultSonnetModel: "deepseek-v4-flash",
+		DefaultHaikuModel:  "deepseek-v4-pro[1m]",
+	}}
+	targets = m.Targets()
+	if len(targets) != 2 {
+		t.Fatalf("duplicate ids should collapse, got %+v", targets)
+	}
+	if targets[0].Slot != "default+opus+haiku" || targets[1].Slot != "sonnet" {
+		t.Errorf("merged slots should keep every label: %+v", targets)
+	}
+}
+
+func TestTargetsIncludesTopLevelModel(t *testing.T) {
+	m := &Model{
+		Env:  Env{Model: "sonnet", DefaultSonnetModel: "gateway-sonnet"},
+		Rest: map[string]json.RawMessage{"model": json.RawMessage(`"gateway-top"`)},
+	}
+	targets := m.Targets()
+	if len(targets) != 2 || targets[0].Slot != "default+sonnet" || targets[1].Slot != "top-level" {
+		t.Fatalf("expected default+sonnet and top-level targets, got %+v", targets)
+	}
+	if targets[0].WireID != "gateway-sonnet" || targets[1].WireID != "gateway-top" {
+		t.Fatalf("unexpected ids: %+v", targets)
+	}
+}
+
 func TestModelWireModelIDStripsContextMarker(t *testing.T) {
 	// qwen-plan shape: top-level + ANTHROPIC_MODEL are the "opus" alias, which
 	// resolves to the [1m]-annotated opus default; the wire form drops [1m].

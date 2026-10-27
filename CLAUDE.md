@@ -6,7 +6,7 @@ This working tree is a real Claude Code project. Its `.claude/settings.local.jso
 `.mcp.json`, and the matching `projects.<cwd>` slice of `~/.claude.json` are
 live config, not fixtures.
 
-**Do not** invoke a built `ccsc` / `ccs` / `cc-switch-cli` binary (or `go run .`)
+**Do not** invoke a built `ccsc` / `cc-switch-cli` binary (or `go run .`)
 from this repository's working directory to try out, smoke-test, or demonstrate
 any command that reads or writes Claude Code / cc-switch-cli state. That includes
 at least:
@@ -27,7 +27,7 @@ A previous session deleted this repo's real `settings.local.json` by running
 - If a binary smoke test is required: `t.Chdir` / `Set-Location` into a temp
   directory first, pass `--path` at that temp dir, and point home-related env
   vars at another temp dir. Never use this repo as the implicit cwd target.
-- After a binary smoke test, delete leftover artifacts (`ccsc.exe`, `ccs`,
+- After a binary smoke test, delete leftover artifacts (`ccsc.exe` / `ccsc`,
   `cc-switch-cli`, stray settings / MCP files). `t.TempDir()` already cleans
   itself; a manually created temp dir must be removed.
 

@@ -63,8 +63,8 @@ func Validate(m *Model) error {
 	if m.BaseURL() == "" {
 		return fmt.Errorf("env.%s must not be empty", EnvBaseURL)
 	}
-	if m.ModelID() == "" {
-		return fmt.Errorf("env.%s (or one of the DEFAULT_* models) must not be empty", EnvModel)
+	if len(m.Targets()) == 0 {
+		return fmt.Errorf("no model id is configured (set env.%s, the top-level \"model\", or an ANTHROPIC_DEFAULT_*_MODEL)", EnvModel)
 	}
 	for _, pair := range []struct {
 		key, val string

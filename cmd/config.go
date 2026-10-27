@@ -36,7 +36,7 @@ var configShowCmd = &cobra.Command{
 		fmt.Printf("models dir   : %s\n", r.ModelsDir)
 		fmt.Printf("config file  : %s\n", r.ConfigFile)
 		if r.TargetPath == "" {
-			fmt.Printf("target       : %s\n", ui.Warn("(not configured; run `ccs init`)"))
+			fmt.Printf("target       : %s\n", ui.Warn("(not configured; run `ccsc init`)"))
 		} else {
 			fmt.Printf("target       : %s\n", r.TargetPath)
 		}

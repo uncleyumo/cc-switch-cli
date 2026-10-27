@@ -15,14 +15,16 @@ const (
 	checkNameTool   = "tool"
 )
 
-// runStream verifies the provider can stream a small message end-to-end.
-func (c *Client) runStream(parent context.Context, name string, m *model.Model) Result {
+// runStream verifies the provider can stream a small message end-to-end for one
+// configured model.
+func (c *Client) runStream(parent context.Context, name string, m *model.Model, target model.ModelTarget) Result {
 	ctx, cancel := context.WithTimeout(parent, c.opts.Timeout)
 	defer cancel()
 
-	modelID := m.WireModelID()
+	modelID := target.WireID
 	if modelID == "" {
-		return Result{Provider: name, Check: checkNameStream, Status: StatusFail,
+		return Result{Provider: name, ModelID: modelID, ModelSlot: target.Slot,
+			Check: checkNameStream, Status: StatusFail,
 			ErrorKind: ErrKindOther, Error: "no model id could be resolved from this config"}
 	}
 
@@ -52,7 +54,8 @@ func (c *Client) runStream(parent context.Context, name string, m *model.Model) 
 		return false, nil
 	})
 	latency := time.Since(start)
-	res := Result{Provider: name, Check: checkNameStream, HTTPStatus: status, TTFT: ttft, Latency: latency}
+	res := Result{Provider: name, ModelID: modelID, ModelSlot: target.Slot,
+		Check: checkNameStream, HTTPStatus: status, TTFT: ttft, Latency: latency}
 	if err != nil {
 		res.Status = StatusFail
 		res.ErrorKind = errorKind(status, err)
@@ -72,13 +75,14 @@ func (c *Client) runStream(parent context.Context, name string, m *model.Model) 
 // to call one (tool_choice is left at the API default, like Claude Code). A
 // request that the endpoint rejects outright is classified by classifyToolError;
 // a clean stream with no tool_use means the gateway does not surface tool calls.
-func (c *Client) runTool(parent context.Context, name string, m *model.Model) Result {
+func (c *Client) runTool(parent context.Context, name string, m *model.Model, target model.ModelTarget) Result {
 	ctx, cancel := context.WithTimeout(parent, c.opts.Timeout)
 	defer cancel()
 
-	modelID := m.WireModelID()
+	modelID := target.WireID
 	if modelID == "" {
-		return Result{Provider: name, Check: checkNameTool, Status: StatusFail,
+		return Result{Provider: name, ModelID: modelID, ModelSlot: target.Slot,
+			Check: checkNameTool, Status: StatusFail,
 			ErrorKind: ErrKindOther, Error: "no model id could be resolved from this config"}
 	}
 
@@ -107,7 +111,8 @@ func (c *Client) runTool(parent context.Context, name string, m *model.Model) Re
 		return false, nil
 	})
 	latency := time.Since(start)
-	res := Result{Provider: name, Check: checkNameTool, HTTPStatus: status, TTFT: ttft, Latency: latency}
+	res := Result{Provider: name, ModelID: modelID, ModelSlot: target.Slot,
+		Check: checkNameTool, HTTPStatus: status, TTFT: ttft, Latency: latency}
 	if err != nil {
 		res.Status = classifyToolError(status)
 		res.ErrorKind = errorKind(status, err)
