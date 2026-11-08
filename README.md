@@ -1,304 +1,327 @@
-# cc-switch-cli
+# ccsc
 
 [English](README.md) | [中文](README_zh.md)
 
-A library of Claude Code provider configs, merged into `~/.claude/settings.json`
-with one command. Single Go binary; rename it to **`ccsc`** on your `PATH`.
+Model configuration for Claude Code, as a library of groups you can apply
+globally or per project. One Go binary; `ccsc` is the only name.
 
 ```bash
-ccsc use packy-bridge   # switch the global provider (field-merge, atomic, auto-backup)
-ccsc current            # → packy-bridge
+ccsc group      # build a group once
+ccsc status     # see what is actually in effect
 ```
 
 Requires Go 1.24.5+ to build from source.
 
 ## Install
 
-### Prebuilt binaries (recommended)
+### Prebuilt binaries
 
-Download the asset for your platform from the
-[[GitHub Releases](https://github.com/<owner>/cc-switch-cli/releases)](https://github.com/uncleyumo/cc-switch-cli/releases) page
-(or your own mirror), then put it on `PATH` and rename if you want a short name:
+Grab the archive for your platform from
+[GitHub Releases](https://github.com/uncleyumo/cc-switch-cli/releases), unpack
+it and put `ccsc` on your `PATH`:
 
 | Platform | Asset |
 |---|---|
-| Windows x86_64 | `cc-switch-cli_<version>_windows_amd64.exe` |
-| Windows ARM64 | `cc-switch-cli_<version>_windows_arm64.exe` |
-| Linux x86_64 | `cc-switch-cli_<version>_linux_amd64` |
-| Linux ARM64 | `cc-switch-cli_<version>_linux_arm64` |
-| macOS Intel | `cc-switch-cli_<version>_darwin_amd64` |
-| macOS Apple Silicon | `cc-switch-cli_<version>_darwin_arm64` |
-
-```bash
-# Linux / macOS example
-chmod +x cc-switch-cli_*_linux_amd64
-mv cc-switch-cli_*_linux_amd64 ~/.local/bin/ccsc
-
-# Windows (PowerShell) example
-# Move-Item cc-switch-cli_*_windows_amd64.exe $env:USERPROFILE\bin\ccsc.exe
-```
+| Windows x86_64 | `ccsc_windows_amd64.zip` |
+| Windows ARM64 | `ccsc_windows_arm64.zip` |
+| Linux x86_64 | `ccsc_linux_amd64.zip` |
+| Linux ARM64 | `ccsc_linux_arm64.zip` |
+| macOS Intel | `ccsc_darwin_amd64.zip` |
+| macOS Apple Silicon | `ccsc_darwin_arm64.zip` |
 
 ### Build from source
 
 ```bash
-git clone <repo> && cd cc-switch-cli
+git clone https://github.com/uncleyumo/cc-switch-cli && cd cc-switch-cli
 
-# Windows: multi-platform release artifacts under dist/
-build.bat
-# optional: set VERSION=2.0.1 && build.bat
-
-# any OS — local binary only
-go build -ldflags="-s -w" -o ccsc .
+build.bat                     # Windows: six targets into dist/
+go build -o ccsc .            # any OS: local binary only
 ```
 
-Then initialize the config directory:
+### Self-update
 
 ```bash
-ccsc init               # create ~/.cc-switch-cli/ + config.toml
+ccsc upgrade --check   # is there a newer release?
+ccsc upgrade           # download, verify sha256, replace, self-check
 ```
 
-Each file in `~/.cc-switch-cli/models/` is one complete Claude Code `settings.json`:
+The running binary is renamed to `ccsc.exe.bak.YYYYMMDD` before the new one is
+written. If the new binary fails `--version` it is rolled back automatically.
 
-```json
-{
-  "env": {
-    "ANTHROPIC_AUTH_TOKEN": "your-api-key",
-    "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
-    "ANTHROPIC_MODEL": "opus",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000"
-  }
-}
-```
+## Concepts
 
-Bundled templates live in the repo under `models/` (`claude`, `deepseek`, `mimo`) —
-copy or adapt them after `init`.
+Only two words matter.
 
-Switching merges the provider into the live `settings.json`: top-level keys the
-provider declares override the file; keys it does not declare (hooks,
-permissions, ...) are preserved, so settings written by Claude Code or plugins
-survive switches. `env` is merged per key, and stale `ANTHROPIC_*` /
-`CLAUDE_CODE_*` keys the new provider does not set are dropped.
+**Group** — one endpoint plus five model slots: `fable`, `opus`, `sonnet`,
+`haiku`, `subagent`. A group carries its own `base_url`, so multiple gateways
+and multiple endpoints are supported simply by having multiple groups.
+
+**Optional** — the other way into a *project-level* configuration: no group
+library, connect to a new-api endpoint now, pick models from the list it
+returns, write the result into the project. It stays in effect until
+`ccsc local` or `ccsc local clear` overrides it.
+
+A session can only talk to one endpoint at a time. That is a Claude Code
+constraint (there is one `ANTHROPIC_BASE_URL`), not a ccsc one.
 
 ## Commands
 
 ```
-ccsc (cc-switch-cli)
-├─ init                          create ~/.cc-switch-cli + config.toml
-├─ use [model]                   activate globally; no arg → TUI picker
-├─ current                       print the active model
-├─ local [model]                 write ./.claude/settings.local.json (deep-merge)
-│    --overwrite                 copy the provider file verbatim instead
-│    --path <dir|file>           target another dir / explicit file
-│  ├─ show [--reveal]            print project-level model + MCP
-│  └─ clear [--model]            delete the file (or strip only model/env keys)
-├─ backup                        snapshot the current settings.json
-├─ model, m                      manager TUI (no subcommand)
-│  ├─ list, ls                   list models + active flag + last test status
-│  ├─ show <name> [--reveal]     print JSON (token masked unless --reveal)
-│  ├─ add <name> [--from x] [--no-edit]
-│  ├─ edit [name]                structured / raw JSON editor
-│  ├─ rename <old> <new>
-│  ├─ remove, rm <name> [-y]
-│  ├─ test [name...]             streaming + tool checks for every configured model
-│  │   --stream / --tool         run one check only
-│  │   --timeout 30s  --concurrency 4  --auth auto|bearer|x-api-key
-│  ├─ doctor                     show every configured model, resolved vs on the wire (read-only)
-│  └─ tui                        explicit manager (same as bare `model`)
-├─ mcp                           MCP manager TUI (no subcommand)
-│  ├─ list, ls [--scope S]       list servers (user / local / project)
-│  ├─ show <name> [--scope S] [--reveal]
-│  ├─ add <name> [--scope local] [-t stdio|http|sse|ws] [-e K=V] [-H "K: V"] -- <cmd|url>
-│  ├─ add-json <name> <json> [--scope S]
-│  ├─ remove, rm <name> [--scope S] [-y]
-│  ├─ test [name...]             initialize + tools/list probe
-│  │   --scope S  --timeout 30s  --concurrency 4
-│  ├─ tools <name> [--scope S]   list tools exposed by a server
-│  └─ tui                        explicit manager (same as bare `mcp`)
-├─ export                        encrypted export of models + user-scope MCPs
-│    -o FILE  --models all|none|a,b  --mcps all|none|x,y  --secret-file F
-├─ import <file>                 decrypt and apply an export
-│    --secret-file F  --force
-└─ config, cfg
-   ├─ show                       resolved paths + current model
-   └─ set-target <path>          change the target settings.json
+ccsc                          workbench, opens on the group list
+├─ group                      groups: new / edit / apply globally / delete
+├─ local                      bind a group to this project
+│  └─ clear                   remove every model key ccsc wrote here
+├─ optional                   connect now, fetch models, write to this project
+├─ status                     what is in effect (read-only)
+│    --reveal                 show the full token
+│    --dir <path>             look at another project directory
+├─ config                     settings panel
+├─ mcp                        servers across user / local / project (read-only)
+│  ├─ test [name]             real initialize + tools/list handshake
+│  --json
+├─ skills                     skills across user / project (read-only)
+├─ upgrade [--check]          self-update from GitHub Releases
+├─ version
+└─ completion <shell>
 ```
 
-`--version` / `-v` prints the build-stamped version.
+`group`, `local`, `optional` and `config` are TUI-only. They refuse to start
+outside a terminal instead of hanging on a pipe. The read-only commands are
+plain text and pipe cleanly.
 
-## Typical use
+## What ccsc writes
 
-```bash
-ccsc model add my-proxy           # template + open the editor
-ccsc model test                   # availability-check every configured model
-ccsc use my-proxy                 # activate globally
-cd my-project && ccsc local my-proxy   # scope it to one project
-ccsc local show                        # project-level model + MCP
-ccsc local clear                       # drop the project-level override
-ccsc model show my-proxy --reveal # full JSON with secrets
+ccsc owns a fixed set of keys and touches nothing else. `hooks`, `permissions`,
+`enabledPlugins`, `effortLevel`, `theme`, unknown keys and other
+`modelSettings` fields survive byte for byte.
 
-ccsc mcp list                     # show MCP servers (all scopes)
-ccsc mcp test fetch-mcp           # probe one server
-ccsc mcp                          # interactive MCP manager
-ccsc export --models all --mcps all --secret-file secret.txt -o backup.json
-ccsc import backup.json --secret-file secret.txt
+| Key | Global | Project |
+|---|:--:|:--:|
+| `env.ANTHROPIC_BASE_URL` | ✓ | ✓ |
+| `env.ANTHROPIC_AUTH_TOKEN` | ✓ | ✓ |
+| `env.ANTHROPIC_DEFAULT_{FABLE,OPUS,SONNET,HAIKU}_MODEL` | ✓ | ✓ |
+| `env.ANTHROPIC_DEFAULT_*_MODEL_NAME` | ✓ | ✓ |
+| `env.ANTHROPIC_DEFAULT_MODEL` (startup fallback) | ✓ | ✓ |
+| `env.CLAUDE_CODE_SUBAGENT_MODEL` | ✓ | ✓ |
+| `env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` | ✓ | ✓ |
+| `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW` | cleared | cleared |
+| `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW_TOKENS` | cleared | cleared |
+| `modelSettings.<id>.autoCompactWindow` | ✓ | — |
+| top-level `autoCompactWindow` | — | ✓ |
+
+Writes are read-modify-write on an order-preserving JSON tree: key order and
+indent come back exactly as they went in, so applying a group produces a diff of
+eight lines instead of a rewritten file.
+
+### Project layer
+
+**The project root is the directory ccsc was run in.** Claude Code does not walk
+upward looking for `.claude/`, so neither does ccsc. `--dir` replaces the root;
+it never triggers a search.
+
+The target is `<cwd>/.claude/settings.local.json`. If that file has no sibling
+`.claude/settings.json` but an ancestor directory does, ccsc warns — Claude Code
+started in `<cwd>` will not read the ancestor's file, which is the quietest way
+to end up with a configuration that looks applied and is never used.
+
+### Startup model
+
+Four layers, highest first:
+
+| # | Source | Written by |
+|---|---|---|
+| 1 | `ANTHROPIC_MODEL` (env) | you or an old config; ccsc only reports it |
+| 2 | `/model` choice → top-level `model` | Claude Code itself |
+| 3 | `ANTHROPIC_DEFAULT_MODEL` | ccsc |
+| 4 | Claude Code's built-in default | — |
+
+ccsc writes layer 3 and nothing else, so it never fights `/model`. The value is
+always a resolved model id, because Claude Code ignores an alias there.
+
+### Context window and auto-compact
+
+Two different things:
+
+- **Hard cap** (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`) — how big the model is. It
+  drives `/status` and the default compaction point.
+- **`autoCompactWindow`** — when compaction actually starts. It is capped by
+  the hard cap, so a larger number is the same as no number.
+
+Defaults: per-slot compact = **90 % of the effective window** (1M if the slot is
+marked 1M, otherwise the group's hard cap). Set it explicitly per slot to
+override.
+
+The two layers store it differently on purpose:
+
+- **Global** → `modelSettings.<id>.autoCompactWindow`, per model, merged into the
+  entry that already exists so your `effortLevel` survives.
+- **Project** → one top-level `autoCompactWindow`. Whether Claude Code merges
+  same-model entries across settings files field by field is undocumented, and a
+  wrong guess would wipe `effortLevel`. When slots disagree, the smallest value
+  wins: compacting early never overflows.
+
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` / `_TOKENS` are always cleared on apply —
+they outrank every per-model value and would turn them into dead configuration.
+
+## Group file
+
+`~/.cc-switch-cli/groups/<name>.json`, mode `0600`:
+
+```jsonc
+{
+  "schema": 1,
+  "base_url": "https://new-api.example.com",
+  "token": "sk-...",
+  "window": 500000,             // group-wide hard cap, 0 = don't write
+  "slots": {
+    "fable":    { "model": "packy-official/deepseek-flash", "name": "DeepSeek" },
+    "opus":     { "model": "packy-cc/claude-opus-5-5", "window": 1000000 },
+    "sonnet":   { "model": "packy-sale/deepseek-flash" },
+    "haiku":    { "model": "zen/glm-5.3-flash-free", "compact": 150000 },
+    "subagent": { "model": "zen/glm-5.3-flash-free" }
+  }
+}
 ```
 
-## `ccsc local` — merge by default
+A slot's `window` is either `0` or `1000000` — `[1m]` is the only per-model
+window Claude Code recognises. Anything else belongs in the group-level
+`window`. The four family slots are required; `subagent` is optional and, when
+empty, `CLAUDE_CODE_SUBAGENT_MODEL` is not written at all.
 
-`ccsc local <name>` deep-merges into `./.claude/settings.local.json`: the
-provider's `env` keys and top-level `model` override same-name values, and
-**everything else is preserved** (permissions, hooks, MCP config, unknown keys).
+## `optional`
 
-- `--overwrite` — copy the provider file verbatim (drops project-specific keys).
-- `--path <dir>` / `--path <file>` — write / inspect / clear elsewhere than the current directory.
-- `ccsc local show` — summarize the project-local model override plus project-scope (`.mcp.json`) and local-scope (`~/.claude.json` → this project) MCP servers. Tokens are masked unless `--reveal`.
-- `ccsc local clear` — delete `settings.local.json` so the project falls back to the global provider. `ccsc local clear --model` strips only the provider `env` / top-level `model` keys and keeps permissions, hooks and custom env. A leftover-empty file is removed. MCP files are never touched.
+```
+ccsc optional
+```
 
-If a provider is literally named `clear` or `show`, write it with `ccsc local -- <name>`.
+One panel, no sub-screens:
 
-## `ccsc model test` — availability
+1. Fill in `base_url` and the token.
+2. `ctrl+f` calls `/v1/models` and loads the list into the model rows.
+3. Type to filter a row, `enter` (or `→`) accepts the highlighted id and moves
+   on. Any id can be typed by hand — new-api translates protocols, so the list
+   is shown in full and never filtered by `supported_endpoint_types`.
 
-Runs real Anthropic Messages calls (streaming + a tool-call probe) for every
-configured model id in each provider, so expect a small token cost. Results are
-cached in `~/.cc-switch-cli/test-status.json`; `ccsc model list` shows the
-provider's worst verdict plus its model count.
+Leaving the `subagent` row empty means it is not configured. Leaving any of the
+four family rows empty is an error.
 
-| Status | Meaning |
-|---|---|
-| **OK** | All requested checks passed — fully usable. |
-| **OK~** | Streaming works (usable for chat) but the tool probe didn't confirm `tool_use` this run — a caveat, not an outage. |
-| **FAIL** | Streaming failed (bad token / no balance / unknown model / unreachable) — not usable. |
+The result is written into the project and stays in effect until `ccsc local`
+or `ccsc local clear` overrides it.
 
-Streaming is the source of truth: a provider whose stream check passed is never
-FAIL, even if the tool probe errored transiently. The tool probe mirrors Claude
-Code — it sends the tool list but omits `tool_choice`, since forced directives
-like `"any"` are rejected by several gateways that relay tools fine.
+## `status`, `mcp`, `skills`
 
-## Context window
+`ccsc status` resolves every model key across the user, project and local
+layers, shows where the winning value came from, then the startup slot, the
+subagent model, the compaction point, and MCP/skills counts. Tokens are masked;
+`--reveal` prints one with a banner.
 
-The **context window** field on a provider is the group default. Type it as
-`128k` / `256k` / `500k` / `1m` / `2m` — the same spelling is shown when you
-reopen the editor. Bare numbers (`500`, `500000`) are rejected. On disk the
-value is stored as a plain integer for Claude Code
-(`CLAUDE_CODE_MAX_CONTEXT_TOKENS`). `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is
-written only when the size is at most 1M and no id in the group has a `[1m]`
-suffix.
+`ccsc mcp` reads all three scopes and marks losers:
 
-On an unrecognized / gateway id, Claude Code treats a trailing `[1m]` as a 1M
-window and then ignores `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for that id. Other
-suffixes such as `[200k]` are stripped on the wire but do not change the
-assumed window. Typical layout: group `500k`, plus `[1m]` on the one id that
-is actually 1M.
+| Scope | Storage | Precedence |
+|---|---|---|
+| user | `<CLAUDE_CONFIG_DIR or ~>/.claude.json` → `mcpServers` | lowest |
+| local | the same file → `projects["<abs cwd>"].mcpServers` | highest |
+| project | `<cwd>/.mcp.json` → `mcpServers` | middle |
 
-`ccsc local` drops the three window keys when the incoming provider does not
-set them. `ccsc model doctor` prints the resolved id, the on-the-wire id, and
-the group window.
-## `ccsc mcp` — MCP servers
+`settings.json` files hold no server definitions — only approval keys, which is
+what the dashboard reads to label a `.mcp.json` server approved or pending.
 
-Manages the MCP servers Claude Code loads from:
+`ccsc mcp test [name]` spawns the server, performs `initialize` and
+`tools/list`, and prints tool count and latency. It writes nothing.
 
-| Scope | Storage |
-|---|---|
-| **user** | `~/.claude.json` top-level `mcpServers` |
-| **local** (default for `add`) | `~/.claude.json` → `projects.<cwd>.mcpServers` |
-| **project** | `<cwd>/.mcp.json` |
+`ccsc skills` merges `~/.claude/skills`, `.claude/skills`, and the `commands`
+directories of both, project over user.
 
-`ccsc mcp test` runs a real initialize handshake and `tools/list` over stdio /
-Streamable HTTP (with legacy SSE fallback). Results cache in
-`~/.cc-switch-cli/mcp-test-status.json`. WebSocket is stored but not probed.
-Sensitive values (tokens, DSN passwords) are masked unless `--reveal`.
+## Keys
 
-Edits write `~/.claude.json` directly (with a timestamped backup under
-`~/.cc-switch-cli/backups/`). Prefer editing while Claude Code is closed —
-a running session may rewrite the file on exit.
+Lists: `↑↓` / `j` `k` / `←→` move, `enter` select, `q` quit. The group list
+also binds `n` new, `u` apply globally, `d` delete.
 
-## `ccsc export` / `ccsc import`
-
-Moves **global** model library files and **user-scope** MCP servers between
-machines. The file is an authenticated AES-256-GCM envelope (scrypt-derived key);
-format version is checked before the secret is requested so incompatible
-exports fail early. Selection is interactive in a TTY, or via
-`--models` / `--mcps` (`all` / `none` / comma list). Existing entries are skipped
-on import unless `--force`.
-
-## TUI keys
-
-Manager (bare `ccsc model`):
+Panels (one screen per configuration, no nested windows):
 
 | Key | Action |
 |---|---|
-| `↑↓` `j` `k` | navigate |
-| `/` | search / filter |
-| `enter` `u` | activate globally |
-| `a` / `n` / `e` / `d` | add / rename / edit / delete |
-| `v` `space` | preview JSON (masked) |
-| `t` / `T` | test selected / test all |
-| `r` | reload models & status |
-| `q` `esc` | quit |
+| `↑↓` `j` `k` `tab` `shift+tab` | move between rows |
+| `←` / `→` | previous / next row |
+| `enter` | accept the highlighted suggestion, then next row |
+| `ctrl+f` | fetch the model list from the endpoint |
+| `v` | reveal a secret row for 10 seconds |
+| `ctrl+u` | clear the current row |
+| `ctrl+s` | save (refused while a row is invalid) |
+| `esc` | cancel |
 
-MCP manager (bare `ccsc mcp`):
+Typing in a model row filters its suggestions in place. Typing in a secret row
+replaces the stored value.
 
-| Key | Action |
-|---|---|
-| `enter` `l` | list tools of selected server |
-| `a` / `e` / `n` / `d` | add / edit / rename / delete |
-| `v` `space` | view JSON (masked) |
-| `t` / `T` | probe selected / all visible |
-| `s` | cycle scope filter (all/user/local/project) |
-| `r` | reload |
-| `q` `esc` | quit |
+Context windows accept `500k`, `567k`, `1m`, `2m` or a bare number, and are
+shown back in the same short form.
 
-Editor (`ccsc model edit <name>` or MCP `e`): `tab`/`shift+tab` move fields,
-`ctrl+j` toggle raw JSON, `ctrl+s` save, `esc` cancel.
+## Output
 
-Non-TTY invocations (`use`, `local`, `edit`, `model`, `mcp`) require an explicit
-name or subcommand; the tool refuses to open the TUI outside a terminal so
-scripts fail loudly.
+Everything ccsc prints is plain English ASCII: no ticks, arrows, box drawing or
+emoji. It stays readable in any terminal, in a pipe, and in a log.
 
 ## Files
 
 ```
 ~/.cc-switch-cli/
-├─ config.toml                  target settings.json path
-├─ models/*.json                provider library
-├─ test-status.json             model probe cache
-├─ mcp-test-status.json         MCP probe cache
-├─ backups/claude-json-*.json   pre-mutation snapshots of ~/.claude.json
-├─ <provider>.current           marker for the active provider
-├─ default*.json / backup-*.json  first-switch + manual backups
-├─ model-switch.logs            append-only switch audit log
-└─ test-status.json             last availability check per provider
+├─ config.toml                 defaults: base_url, token, startup slot, window
+├─ groups/<name>.json          the group library (plaintext token, 0600)
+├─ cache/models/*.json         model lists, keyed by host + token hash
+├─ state.json                  what ccsc applied where, and which models it owns
+├─ backups/<target>/*.json     ten most recent snapshots of each file it wrote
+└─ audit.jsonl                 append-only history, 5 MB × 3
 ```
 
-`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` are masked in `model show` and TUI
-previews unless `--reveal`; the status cache never stores tokens or request bodies.
+Deleting this directory and the binary leaves no trace.
 
-## Build matrix
+Set `CCSC_HOME` to move the whole thing.
 
-`build.bat` cross-compiles six static binaries into `dist/`:
+## Tokens
 
-```
-cc-switch-cli_<version>_windows_amd64.exe
-cc-switch-cli_<version>_windows_arm64.exe
-cc-switch-cli_<version>_linux_amd64
-cc-switch-cli_<version>_linux_arm64
-cc-switch-cli_<version>_darwin_amd64
-cc-switch-cli_<version>_darwin_arm64
-```
+Stored in plaintext at mode `0600`. This is masked *display*, not encryption:
+`sk-tes******mnop` everywhere. Inside a panel, `v` reveals the value for ten
+seconds; `ccsc status --reveal` prints it once, with a warning first.
 
-Naming follows the common Go release convention: `name_version_os_arch`.
-`darwin` is macOS (Go toolchain name for the Darwin kernel).
+Only one credential concept exists. ccsc writes `ANTHROPIC_AUTH_TOKEN`, which
+gateways accept as `Authorization: Bearer`. `ANTHROPIC_API_KEY` (the `x-api-key`
+header) is not exposed as a choice; if the target file already has one with the
+same value, it is removed as redundant and the receipt says so.
 
 ## v1 → v2
 
+v1 provider files are migrated once, on the first TUI command:
+
+```bash
+ccsc group     # migrates, then opens the library
+```
+
+Each `~/.cc-switch-cli/models/*.json` becomes a group. The originals are moved
+to `~/.cc-switch-cli/backups/legacy-models-<date>/`, a `.migrated-v2` marker
+makes it idempotent, and groups that already exist are never overwritten.
+
 | v1 | v2 |
 |---|---|
-| `cc-switch-cli list` | `ccsc model list` |
-| `cc-switch-cli cat <name>` | `ccsc model show <name>` |
-| `cc-switch-cli model set <name>` | `ccsc use <name>` |
-| `cc-switch-cli model current` | `ccsc current` |
-| `cc-switch-cli model backup` | `ccsc backup` |
-| `cc-switch-cli local <name> [path] --force` | `ccsc local <name> [--path <p>] [--overwrite]` |
+| `ccsc use <name>` | `ccsc group` → `u` |
+| `ccsc model *` | `ccsc group` |
+| `ccsc local [name]` | `ccsc local` → `enter` |
+| `ccsc local clear --model` | `ccsc local clear` |
+| `ccsc mcp add/remove/show/tools` | removed — MCP is read-only now |
+| `ccsc export` / `ccsc import` | removed |
+| `ccsc backup` / `ccsc current` / `ccsc init` | removed; state is implicit |
+| `ccsc model test` | removed — use `ccsc status` to see the effective config |
 
-`local` now defaults to `.claude/settings.local.json` and merges (v1 wrote to the
-directory root and byte-copied). Pass `--overwrite` for v1 behaviour.
+## Not in scope
+
+- No proxy or model router: one session, one endpoint.
+- No MCP or skills editing. Read-only dashboards, plus a connectivity probe.
+- No `modelPicker`.
+- No `--no-tui` fallback. No terminal, no TUI: the command exits.
+- Automatic model-list fetching is **off** in `group` and `local`. It only
+  exists in `optional`, where the whole point is talking to a new-api endpoint.
+
+## Build matrix
+
+`build.bat` cross-compiles six static binaries into `dist/`
+(`ccsc_<version>_<os>_<arch>`). `.goreleaser.yml` produces the release assets
+`ccsc_<os>_<arch>.zip` plus `checksums.txt` — the names `ccsc upgrade` expects.

@@ -1,38 +1,32 @@
-// Package cmd wires the Cobra command tree. Command handlers stay thin: they
-// parse args and flags, gate TUI features on TTY availability and delegate all
-// real work to the internal packages.
 package cmd
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/spf13/cobra"
 
-	"cc-switch-cli/internal/version"
+	"github.com/uncleyumo/ccsc/internal/version"
 )
 
 var rootCmd = &cobra.Command{
-	Use:           "cc-switch-cli",
-	Aliases:       []string{"ccsc"},
-	Short:         "Manage Claude Code model providers and MCP servers",
-	Long:          "cc-switch-cli maintains a library of Claude Code model provider settings, swaps them into ~/.claude/settings.json, and manages MCP server entries in ~/.claude.json / .mcp.json. Encrypted export/import moves configs between machines. See `cc-switch-cli <command> --help` for details.",
-	Version:       version.String(),
+	Use:           "ccsc",
+	Short:         "model configuration for Claude Code",
+	Long:          "Groups of model settings, applied globally or per project.",
 	SilenceUsage:  true,
-	SilenceErrors: false,
+	SilenceErrors: true,
+}
+
+// Execute runs the root command and returns the process exit code.
+func Execute() int {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	return 0
 }
 
 func init() {
-	rootCmd.AddCommand(initCmd)
-	rootCmd.AddCommand(useCmd)
-	rootCmd.AddCommand(currentCmd)
-	rootCmd.AddCommand(localCmd)
-	rootCmd.AddCommand(backupCmd)
-	rootCmd.AddCommand(modelCmd)
-	rootCmd.AddCommand(mcpCmd)
-	rootCmd.AddCommand(exportCmd)
-	rootCmd.AddCommand(importCmd)
-	rootCmd.AddCommand(configCmd)
-}
-
-// Execute is the entry point invoked by main.
-func Execute() error {
-	return rootCmd.Execute()
+	rootCmd.Version = version.String()
+	rootCmd.SetVersionTemplate("ccsc {{.Version}}\n")
 }

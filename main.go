@@ -3,11 +3,9 @@ package main
 import (
 	"os"
 
-	"cc-switch-cli/cmd"
+	"github.com/uncleyumo/ccsc/cmd"
 )
 
 func main() {
-	if err := cmd.Execute(); err != nil {
-		os.Exit(1)
-	}
+	os.Exit(cmd.Execute())
 }

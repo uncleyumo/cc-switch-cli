@@ -5,57 +5,116 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"cc-switch-cli/internal/manager"
-	"cc-switch-cli/internal/ui"
-)
-
-var (
-	localOverwrite bool
-	localPath      string
+	"github.com/uncleyumo/ccsc/internal/apply"
+	"github.com/uncleyumo/ccsc/internal/ccstate"
+	"github.com/uncleyumo/ccsc/internal/group"
+	"github.com/uncleyumo/ccsc/internal/render"
+	"github.com/uncleyumo/ccsc/internal/store"
+	"github.com/uncleyumo/ccsc/internal/workbench"
 )
 
 var localCmd = &cobra.Command{
-	Use:   "local [model]",
-	Short: "Write, inspect or clear the project-local settings.local.json",
-	Long: `Create, inspect or clear .claude/settings.local.json in the current project
-so Claude Code uses a chosen provider only inside this repository.
-
-  ccsc local <name>             deep-merge the named provider into the file
-  ccsc local show               print the current project-level model and MCP
-  ccsc local clear              delete the file (drop the project-level model)
-  ccsc local clear --model      strip only model/env keys; keep the rest
-
-By default a write is a deep-merge: env keys and the top-level "model" from
-the provider are applied while every other project setting (permissions,
-hooks) is preserved. Use --overwrite to replace the file wholesale, or
---path to target somewhere other than the current directory.
-
-If a provider is named "clear" or "show", write it with: ccsc local -- <name>`,
-	Args: cobra.MaximumNArgs(1),
+	Use:   "local",
+	Short: "bind a group to this project",
+	Long:  "writes <project>/.claude/settings.local.json. The project root is the current directory; ccsc never walks upward.",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name, err := resolveModelArg(args, "write locally")
+		paths, cfg, err := load()
 		if err != nil {
 			return err
 		}
-		target, err := manager.CreateLocalConfig(name, manager.LocalOptions{
-			Path:      localPath,
-			Overwrite: localOverwrite,
+		project, ok := resolveProject(projectFlag)
+		if !ok {
+			return fmt.Errorf("%s is not a project directory", projectFlag)
+		}
+		if err := requireTTY(); err != nil {
+			return err
+		}
+
+		names, err := group.List(paths.GroupsDir())
+		if err != nil {
+			return err
+		}
+		res, err := workbench.RunList(workbench.ListOptions{
+			Title:  "project",
+			Items:  names,
+			Header: []string{project.Dir, "target: " + project.LocalFile, ""},
+			Bindings: []workbench.Binding{
+				{Key: "enter", Label: "apply", Action: workbench.ActApply},
+				{Key: "q", Label: "quit", Action: workbench.ActQuit},
+			},
+			Empty:  "the group library is empty; create one with ccsc group",
+			Cursor: boundIndex(paths, project, names),
 		})
 		if err != nil {
 			return err
 		}
-		mode := "merged"
-		if localOverwrite {
-			mode = "overwritten"
+		if res.Action != workbench.ActApply {
+			return nil
 		}
-		fmt.Println(ui.Success(fmt.Sprintf("%s: %s (%s)", name, target, mode)))
+		g, err := group.Load(paths.GroupsDir(), res.Item)
+		if err != nil {
+			return err
+		}
+		r, err := apply.Run(apply.Request{
+			Paths:   paths,
+			Group:   g,
+			Layer:   apply.Project,
+			Project: project,
+			Options: render.Options{StartupSlot: cfg.StartupSlot()},
+			Action:  "local.apply",
+		})
+		if err != nil {
+			return err
+		}
+		printReceipt(r)
 		return nil
 	},
 }
 
+var localClearCmd = &cobra.Command{
+	Use:   "clear",
+	Short: "remove the model keys ccsc wrote into this project",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		paths, _, err := load()
+		if err != nil {
+			return err
+		}
+		project, ok := resolveProject(projectFlag)
+		if !ok {
+			return fmt.Errorf("%s is not a project directory", projectFlag)
+		}
+		r, err := apply.Clear(paths, apply.Project, project)
+		if err != nil {
+			return err
+		}
+		printReceipt(r)
+		return nil
+	},
+}
+
+// boundIndex puts the group this project is already using under the cursor.
+func boundIndex(paths store.Paths, project ccstate.Project, names []string) int {
+	state, err := ccstate.LoadState(paths.Root)
+	if err != nil {
+		return 0
+	}
+	ps, ok := state.Projects[project.Key()]
+	if !ok {
+		return 0
+	}
+	for i, name := range names {
+		if name == ps.Group {
+			return i
+		}
+	}
+	return 0
+}
+
 func init() {
-	localCmd.PersistentFlags().StringVar(&localPath, "path", "", "Custom target: a directory (auto-appends .claude/settings.local.json) or an explicit file path")
-	localCmd.Flags().BoolVar(&localOverwrite, "overwrite", false, "Replace the target file wholesale instead of deep-merging")
+	addProjectFlag(localCmd)
+	addProjectFlag(localClearCmd)
 	localCmd.AddCommand(localClearCmd)
-	localCmd.AddCommand(localShowCmd)
+	rootCmd.AddCommand(localCmd)
 }

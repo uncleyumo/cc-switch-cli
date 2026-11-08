@@ -1,190 +1,224 @@
+// Package config owns the settings panel persisted to <root>/config.toml.
+//
+// The panel holds what is true for every group: the global settings.json
+// override, the values a new group is seeded with, the model-list cache
+// lifetime and the interface theme. Anything that describes a single group
+// lives in <root>/groups/<name>.json instead.
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/uncleyumo/ccsc/internal/ccstate"
+	"github.com/uncleyumo/ccsc/internal/group"
+	"github.com/uncleyumo/ccsc/internal/store"
 )
 
-// Config maps the on-disk config.toml.
-type Config struct {
-	Target TargetConfig `toml:"target"`
-}
+// Defaults applied when config.toml is missing or leaves a key out.
+const (
+	// DefaultStartupSlot is the model slot Claude Code starts on.
+	DefaultStartupSlot = "sonnet"
+	// DefaultTTLHours is how long a /v1/models snapshot stays fresh.
+	DefaultTTLHours = 24
+	// DefaultTheme is the "follow the terminal" theme name.
+	DefaultTheme = "auto"
+)
 
-// TargetConfig describes where the active settings.json lives.
-type TargetConfig struct {
+// Target overrides where ccsc writes the global Claude Code settings.
+type Target struct {
+	// Path replaces the global settings.json when non-empty. A relative path
+	// is resolved against the working directory, a leading ~ is expanded.
 	Path string `toml:"path"`
 }
 
-// Resolved is a bundle of paths and derived state used by `config show`.
-type Resolved struct {
-	Home       string
-	ConfigDir  string
-	ModelsDir  string
-	ConfigFile string
-	TargetPath string
+// Defaults are the values a new group is seeded with.
+type Defaults struct {
+	// BaseURL is the default group endpoint. It is deliberately empty: ccsc
+	// never pre-fills an Anthropic URL.
+	BaseURL string `toml:"base_url"`
+	// Token is the default group auth token. It is stored in clear text, so
+	// config.toml is written with mode 0600.
+	Token string `toml:"token"`
+	// StartupSlot is the family slot Claude Code starts on: fable, opus,
+	// sonnet or haiku. An unknown value falls back to sonnet (see
+	// StartupSlot); Validate rejects it.
+	StartupSlot string `toml:"startup_slot"`
+	// Window is the default hard context cap in tokens. 0 means no cap is
+	// written.
+	Window int64 `toml:"window"`
+	// Compact is the default auto-compact threshold in tokens. 0 means
+	// derive 90% of the effective window.
+	Compact int64 `toml:"compact"`
 }
 
-// Home wraps os.UserHomeDir with a stable error message.
-func Home() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve user home directory: %w", err)
-	}
-	if home == "" {
-		return "", errors.New("user home directory is empty")
-	}
-	return home, nil
+// Cache controls how long a gateway model-list snapshot is reused.
+type Cache struct {
+	// TTLHours is the snapshot lifetime in hours; 0 means every command
+	// refetches.
+	TTLHours int `toml:"ttl_hours"`
 }
 
-// ConfigDir returns ~/.cc-switch-cli.
-func ConfigDir() (string, error) {
-	home, err := Home()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".cc-switch-cli"), nil
+// UI holds presentation-only preferences.
+type UI struct {
+	// Theme is the interface theme name, "auto" by default.
+	Theme string `toml:"theme"`
 }
 
-// ModelsDir returns the directory that holds provider JSON files.
-func ModelsDir() (string, error) {
-	dir, err := ConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "models"), nil
+// Config is the whole settings panel.
+type Config struct {
+	Target   Target   `toml:"target"`
+	Defaults Defaults `toml:"defaults"`
+	Cache    Cache    `toml:"cache"`
+	UI       UI       `toml:"ui"`
 }
 
-// DefaultTargetPath is the shipping default for target.path.
-func DefaultTargetPath() (string, error) {
-	home, err := Home()
-	if err != nil {
-		return "", err
+// Default returns the panel used when no config.toml exists.
+func Default() *Config {
+	return &Config{
+		Defaults: Defaults{StartupSlot: DefaultStartupSlot},
+		Cache:    Cache{TTLHours: DefaultTTLHours},
+		UI:       UI{Theme: DefaultTheme},
 	}
-	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
-// ConfigFilePath returns ~/.cc-switch-cli/config.toml.
-func ConfigFilePath() (string, error) {
-	dir, err := ConfigDir()
+// Load reads <root>/config.toml. A missing file returns Default with no
+// error; keys the file omits keep their default. Undecodable TOML is an error.
+func Load(p store.Paths) (*Config, error) {
+	path := p.ConfigFile()
+	data, err := store.ReadFileOrEmpty(path)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("cannot read %s: %w", store.Shorten(path), err)
 	}
-	return filepath.Join(dir, "config.toml"), nil
+	c := Default()
+	if len(data) == 0 {
+		return c, nil
+	}
+	if _, err := toml.Decode(string(data), c); err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", store.Shorten(path), err)
+	}
+	c.normalize()
+	return c, nil
 }
 
-// Load reads and validates config.toml.
-func Load() (*Config, error) {
-	path, err := ConfigFilePath()
-	if err != nil {
-		return nil, err
+// Save writes <root>/config.toml atomically with mode 0600, because the panel
+// can hold a default token.
+func Save(p store.Paths, c *Config) error {
+	if c == nil {
+		return errors.New("config: cannot save a nil config")
 	}
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("config not found at %s: run `cc-switch-cli init` first", path)
-	} else if err != nil {
-		return nil, fmt.Errorf("failed to stat config.toml: %w", err)
+	var buf bytes.Buffer
+	enc := toml.NewEncoder(&buf)
+	enc.Indent = ""
+	if err := enc.Encode(c); err != nil {
+		return fmt.Errorf("cannot encode config: %w", err)
 	}
-
-	var cfg Config
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config.toml: %w", err)
-	}
-
-	if cfg.Target.Path == "" {
-		return nil, errors.New("target.path is empty in config.toml")
-	}
-	return &cfg, nil
-}
-
-// WriteDefaultConfig creates config.toml with target.path=DefaultTargetPath().
-// The parent directory must already exist.
-func WriteDefaultConfig() error {
-	path, err := ConfigFilePath()
-	if err != nil {
-		return err
-	}
-	target, err := DefaultTargetPath()
-	if err != nil {
-		return err
-	}
-	cfg := Config{Target: TargetConfig{Path: target}}
-
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("failed to create config.toml: %w", err)
-	}
-	defer f.Close()
-
-	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
-		return fmt.Errorf("failed to write config.toml: %w", err)
+	path := p.ConfigFile()
+	if err := store.AtomicWrite(path, buf.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("cannot write %s: %w", store.Shorten(path), err)
 	}
 	return nil
 }
 
-// SetTarget updates config.toml's target.path (creating config.toml if needed).
-func SetTarget(path string) error {
-	if path == "" {
-		return errors.New("target path must not be empty")
+// Validate reports whether the panel is usable. startup_slot must be one of
+// the four family slots, and none of the numeric settings may be negative.
+func (c *Config) Validate() error {
+	if c == nil {
+		return errors.New("config: nil config")
 	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("invalid target path: %w", err)
+	if _, ok := familySlot(c.Defaults.StartupSlot); !ok {
+		return fmt.Errorf("config: startup_slot must be one of %s, got %q",
+			slotList(), c.Defaults.StartupSlot)
 	}
-
-	dir, err := ConfigDir()
-	if err != nil {
-		return err
+	if c.Defaults.Window < 0 {
+		return fmt.Errorf("config: window must not be negative, got %d", c.Defaults.Window)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
+	if c.Defaults.Compact < 0 {
+		return fmt.Errorf("config: compact must not be negative, got %d", c.Defaults.Compact)
 	}
-
-	cfgPath, err := ConfigFilePath()
-	if err != nil {
-		return err
-	}
-	cfg := Config{Target: TargetConfig{Path: abs}}
-	f, err := os.Create(cfgPath)
-	if err != nil {
-		return fmt.Errorf("failed to create config.toml: %w", err)
-	}
-	defer f.Close()
-	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
-		return fmt.Errorf("failed to write config.toml: %w", err)
+	if c.Cache.TTLHours < 0 {
+		return fmt.Errorf("config: ttl_hours must not be negative, got %d", c.Cache.TTLHours)
 	}
 	return nil
 }
 
-// Resolve gathers every derived path in one call for `config show`.
-func Resolve() (*Resolved, error) {
-	home, err := Home()
+// SettingsPath is the global settings.json ccsc writes: Target.Path when set,
+// otherwise the file Claude Code itself would use.
+func (c *Config) SettingsPath() (string, error) {
+	if c != nil {
+		if v := strings.TrimSpace(c.Target.Path); v != "" {
+			return absolutePath(v)
+		}
+	}
+	return ccstate.UserSettingsPath()
+}
+
+// StartupSlot is the configured startup slot, or group.Sonnet when the value
+// is empty or unknown.
+func (c *Config) StartupSlot() group.SlotName {
+	if c == nil {
+		return group.Sonnet
+	}
+	if n, ok := familySlot(c.Defaults.StartupSlot); ok {
+		return n
+	}
+	return group.Sonnet
+}
+
+// normalize trims stray whitespace and restores the startup-slot default after
+// decoding, so a hand-edited empty value does not leave the panel unusable.
+func (c *Config) normalize() {
+	c.Defaults.BaseURL = strings.TrimSpace(c.Defaults.BaseURL)
+	c.Defaults.StartupSlot = strings.TrimSpace(c.Defaults.StartupSlot)
+	c.UI.Theme = strings.TrimSpace(c.UI.Theme)
+	c.Target.Path = strings.TrimSpace(c.Target.Path)
+	if c.Defaults.StartupSlot == "" {
+		c.Defaults.StartupSlot = DefaultStartupSlot
+	}
+	if c.UI.Theme == "" {
+		c.UI.Theme = DefaultTheme
+	}
+}
+
+// familySlot parses s as one of the four family slots. It is case-insensitive
+// and rejects the subagent slot, which Claude Code never starts on.
+func familySlot(s string) (group.SlotName, bool) {
+	n := group.SlotName(strings.ToLower(strings.TrimSpace(s)))
+	for _, k := range group.ModelSlots {
+		if n == k {
+			return n, true
+		}
+	}
+	return "", false
+}
+
+// slotList renders the allowed startup slots for error messages.
+func slotList() string {
+	names := make([]string, len(group.ModelSlots))
+	for i, k := range group.ModelSlots {
+		names[i] = string(k)
+	}
+	return strings.Join(names, ", ")
+}
+
+// absolutePath expands a leading ~ and makes p absolute.
+func absolutePath(p string) (string, error) {
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("config: cannot expand %q: %w", p, err)
+		}
+		p = filepath.Join(home, p[1:])
+	}
+	abs, err := filepath.Abs(p)
 	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("config: cannot resolve %q: %w", p, err)
 	}
-	dir, err := ConfigDir()
-	if err != nil {
-		return nil, err
-	}
-	models, err := ModelsDir()
-	if err != nil {
-		return nil, err
-	}
-	cfgFile, err := ConfigFilePath()
-	if err != nil {
-		return nil, err
-	}
-	target := ""
-	if cfg, loadErr := Load(); loadErr == nil {
-		target = cfg.Target.Path
-	}
-	return &Resolved{
-		Home:       home,
-		ConfigDir:  dir,
-		ModelsDir:  models,
-		ConfigFile: cfgFile,
-		TargetPath: target,
-	}, nil
+	return abs, nil
 }

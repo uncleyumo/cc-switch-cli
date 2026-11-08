@@ -1,286 +1,313 @@
-# cc-switch-cli
+# ccsc
 
 [English](README.md) | [中文](README_zh.md)
 
-把 Claude Code 的模型提供商配置收成库，一条命令原子切换到
-`~/.claude/settings.json`。单文件 Go 二进制；放到 `PATH` 后可改名为 **`ccsc`**
-方便使用。
+把 Claude Code 的模型配置收成一个分组库，全局或按项目应用。单文件 Go 二进制，
+只有一个名字：`ccsc`。
 
 ```bash
-ccsc use packy-bridge   # 切换全局提供商（字段合并，原子写入，自动备份）
-ccsc current            # → packy-bridge
+ccsc group      # 先把分组建起来
+ccsc status     # 看现在到底在用什么
 ```
 
 从源码构建需要 Go 1.24.5+。
 
 ## 安装
 
-### 预编译二进制（推荐）
+### 预编译二进制
 
-从 [GitHub Releases](https://github.com/<owner>/cc-switch-cli/releases)
-（或你自己的镜像）下载对应平台资源，放到 `PATH`，需要短名就自行改名：
+从 [GitHub Releases](https://github.com/uncleyumo/cc-switch-cli/releases)
+下载对应平台的压缩包，解压后把 `ccsc` 放进 `PATH`：
 
 | 平台 | 资源文件 |
 |---|---|
-| Windows x86_64 | `cc-switch-cli_<version>_windows_amd64.exe` |
-| Windows ARM64 | `cc-switch-cli_<version>_windows_arm64.exe` |
-| Linux x86_64 | `cc-switch-cli_<version>_linux_amd64` |
-| Linux ARM64 | `cc-switch-cli_<version>_linux_arm64` |
-| macOS Intel | `cc-switch-cli_<version>_darwin_amd64` |
-| macOS Apple Silicon | `cc-switch-cli_<version>_darwin_arm64` |
-
-```bash
-# Linux / macOS 示例
-chmod +x cc-switch-cli_*_linux_amd64
-mv cc-switch-cli_*_linux_amd64 ~/.local/bin/ccsc
-
-# Windows（PowerShell）示例
-# Move-Item cc-switch-cli_*_windows_amd64.exe $env:USERPROFILE\bin\ccsc.exe
-```
+| Windows x86_64 | `ccsc_windows_amd64.zip` |
+| Windows ARM64 | `ccsc_windows_arm64.zip` |
+| Linux x86_64 | `ccsc_linux_amd64.zip` |
+| Linux ARM64 | `ccsc_linux_arm64.zip` |
+| macOS Intel | `ccsc_darwin_amd64.zip` |
+| macOS Apple Silicon | `ccsc_darwin_arm64.zip` |
 
 ### 从源码构建
 
 ```bash
-git clone <repo> && cd cc-switch-cli
+git clone https://github.com/uncleyumo/cc-switch-cli && cd cc-switch-cli
 
-# Windows：在 dist/ 下交叉编译多平台发布产物
-build.bat
-# 可选：set VERSION=2.0.1 && build.bat
-
-# 任意系统 — 仅本地二进制
-go build -ldflags="-s -w" -o ccsc .
+build.bat                     # Windows：六个平台产物到 dist/
+go build -o ccsc .            # 任意系统：只出本地二进制
 ```
 
-然后初始化配置目录：
+### 自更新
 
 ```bash
-ccsc init               # 创建 ~/.cc-switch-cli/ + config.toml
+ccsc upgrade --check   # 有没有新版本
+ccsc upgrade           # 下载、校验 sha256、替换、自检
 ```
 
-`~/.cc-switch-cli/models/` 下每个文件就是一份完整的 Claude Code `settings.json`：
+替换前把当前二进制改名为 `ccsc.exe.bak.YYYYMMDD`；新二进制跑不通 `--version`
+会自动回滚。
 
-```json
-{
-  "env": {
-    "ANTHROPIC_AUTH_TOKEN": "your-api-key",
-    "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
-    "ANTHROPIC_MODEL": "opus",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000"
-  }
-}
-```
+## 两个概念
 
-仓库 `models/` 目录附带模板（`claude`、`deepseek`、`mimo`），`init` 后可拷贝或改写。
+只有两个词。
 
-切换是合并语义：provider 声明的顶层键覆盖 `settings.json` 同名键，未声明的键
-（hooks、permissions 等）原样保留，Claude Code 或插件在两次切换之间写入的设置
-不会丢失。`env` 逐键合并，新 provider 未声明的 `ANTHROPIC_*` / `CLAUDE_CODE_*`
-键会被清除。
+**分组（group）**：一个接入点 + 五个模型槽位 —— `fable`、`opus`、`sonnet`、
+`haiku`、`subagent`。分组自带 `base_url`，所以多网关、多接入点天然支持：
+换网关就是换分组。
+
+**临时组合（optional）**：进项目级配置的另一条路 —— 不经过分组库，现场连一个
+new-api 接入点、从它返回的列表里挑模型、写进项目。写入后一直有效，直到被
+`ccsc local` 或 `ccsc local clear` 覆盖。
+
+一个会话同时只能指向一个接入点。这是 Claude Code 的约束（只有一份
+`ANTHROPIC_BASE_URL`），不是 ccsc 的限制。
 
 ## 命令
 
 ```
-ccsc (cc-switch-cli)
-├─ init                          创建 ~/.cc-switch-cli + config.toml
-├─ use [model]                   全局激活；无参数 → TUI 选择器
-├─ current                       打印当前激活的模型
-├─ local [model]                 写入 ./.claude/settings.local.json（深度合并）
-│    --overwrite                 改为整文件覆盖
-│    --path <dir|file>           指定其它目录 / 文件
-│  ├─ show [--reveal]            打印项目级模型 + MCP
-│  └─ clear [--model]            删除该文件（或只清模型 / env 键）
-├─ backup                        快照当前 settings.json
-├─ model, m                      管理器 TUI（无子命令时）
-│  ├─ list, ls                   列出模型 + 激活标记 + 最近测试状态
-│  ├─ show <name> [--reveal]     打印 JSON（默认遮罩 token）
-│  ├─ add <name> [--from x] [--no-edit]
-│  ├─ edit [name]                结构化 / 原始 JSON 编辑器
-│  ├─ rename <old> <new>
-│  ├─ remove, rm <name> [-y]
-│  ├─ test [name...]             对每个已配置的模型做流式 + 工具探测
-│  │   --stream / --tool         只跑其中一项
-│  │   --timeout 30s  --concurrency 4  --auth auto|bearer|x-api-key
-│  ├─ doctor                     打印每个已配置模型的解析结果 / 实际上线 id（只读）
-│  └─ tui                        显式打开管理器（等同裸 `model`）
-├─ mcp                           MCP 管理器 TUI（无子命令时）
-│  ├─ list, ls [--scope S]       列出服务器（user / local / project）
-│  ├─ show <name> [--scope S] [--reveal]
-│  ├─ add <name> [--scope local] [-t stdio|http|sse|ws] [-e K=V] [-H "K: V"] -- <cmd|url>
-│  ├─ add-json <name> <json> [--scope S]
-│  ├─ remove, rm <name> [--scope S] [-y]
-│  ├─ test [name...]             initialize + tools/list 探测
-│  │   --scope S  --timeout 30s  --concurrency 4
-│  ├─ tools <name> [--scope S]   列出服务器暴露的工具
-│  └─ tui                        显式打开管理器（等同裸 `mcp`）
-├─ export                        加密导出模型 + 用户级 MCP
-│    -o FILE  --models all|none|a,b  --mcps all|none|x,y  --secret-file F
-├─ import <file>                 解密并导入
-│    --secret-file F  --force
-└─ config, cfg
-   ├─ show                       解析后的路径 + 当前模型
-   └─ set-target <path>          修改目标 settings.json
+ccsc                          工作台，停在分组列表
+├─ group                      分组：新建 / 编辑 / 应用全局 / 删除
+├─ local                      把分组绑定到本项目
+│  └─ clear                   清除本项目里 ccsc 写过的模型键
+├─ optional                   现场连接、拉模型、写进本项目
+├─ status                     当前生效配置（只读）
+│    --reveal                 显示完整令牌
+│    --dir <path>             看别的项目目录
+├─ config                     设置面板
+├─ mcp                        用户 / 本地 / 项目三层 MCP（只读）
+│  ├─ test [name]             真实 initialize + tools/list 握手
+│  --json
+├─ skills                     用户 / 项目两层 Skills（只读）
+├─ upgrade [--check]          从 GitHub Releases 自更新
+├─ version
+└─ completion <shell>
 ```
 
-`--version` / `-v` 打印构建时写入的版本信息。
+`group`、`local`、`optional`、`config` 是纯 TUI。在非终端环境里直接报错退出，
+不会挂在那里等按键。只读命令是纯文本，可以管道。
 
-## 典型用法
+## ccsc 写哪些键
 
-```bash
-ccsc model add my-proxy           # 模板 + 打开编辑器
-ccsc model test                   # 对每个提供商里的每个已配置模型做可用性检查
-ccsc use my-proxy                 # 全局激活
-cd my-project && ccsc local my-proxy   # 仅作用于当前项目
-ccsc local show                        # 查看项目级模型 + MCP
-ccsc local clear                       # 取消项目级覆盖
-ccsc model show my-proxy --reveal # 带密钥的完整 JSON
+ccsc 只碰一张固定的表，其余一律不动：`hooks`、`permissions`、
+`enabledPlugins`、`effortLevel`、`theme`、未知键、`modelSettings` 的其他字段
+都会原样保留。
 
-ccsc mcp list                     # 查看 MCP 服务器
-ccsc mcp test fetch-mcp           # 探测单个服务器
-ccsc mcp                          # 交互式 MCP 管理器
-ccsc export --models all --mcps all --secret-file secret.txt -o backup.json
-ccsc import backup.json --secret-file secret.txt
+| 键 | 全局 | 项目 |
+|---|:--:|:--:|
+| `env.ANTHROPIC_BASE_URL` | ✓ | ✓ |
+| `env.ANTHROPIC_AUTH_TOKEN` | ✓ | ✓ |
+| `env.ANTHROPIC_DEFAULT_{FABLE,OPUS,SONNET,HAIKU}_MODEL` | ✓ | ✓ |
+| `env.ANTHROPIC_DEFAULT_*_MODEL_NAME` | ✓ | ✓ |
+| `env.ANTHROPIC_DEFAULT_MODEL`（启动兜底） | ✓ | ✓ |
+| `env.CLAUDE_CODE_SUBAGENT_MODEL` | ✓ | ✓ |
+| `env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` | ✓ | ✓ |
+| `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 清除 | 清除 |
+| `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW_TOKENS` | 清除 | 清除 |
+| `modelSettings.<id>.autoCompactWindow` | ✓ | — |
+| 顶层 `autoCompactWindow` | — | ✓ |
+
+写入是保序 JSON 的读改写：键序和缩进原样回去，应用一次分组只产生八行 diff，
+不会把整个文件重排。
+
+### 项目层
+
+**项目根就是 ccsc 被执行的目录。** Claude Code 不会向上找 `.claude/`，ccsc 也
+不找。`--dir` 只替换根，不触发任何向上搜索。
+
+目标文件是 `<cwd>/.claude/settings.local.json`。如果那里没有同级的
+`.claude/settings.json` 而某个祖先目录有，ccsc 会警告 —— 在 `<cwd>` 启动的
+Claude Code 不会读祖先的文件，这是「看起来配好了、其实从没生效」最安静的
+一种死法。
+
+### 启动模型
+
+四层，从高到低：
+
+| # | 来源 | 谁写 |
+|---|---|---|
+| 1 | `ANTHROPIC_MODEL`（环境变量） | 你或旧配置；ccsc 只报告 |
+| 2 | `/model` 的选择 → 顶层 `model` | Claude Code 自己 |
+| 3 | `ANTHROPIC_DEFAULT_MODEL` | ccsc |
+| 4 | Claude Code 内置默认 | — |
+
+ccsc 只写第 3 层，绝不和 `/model` 抢开关。值一定是解析后的完整模型 ID，因为
+这里写别名会被忽略。
+
+### 上下文窗口与自动压缩
+
+两件不同的事：
+
+- **硬上限**（`CLAUDE_CODE_MAX_CONTEXT_TOKENS`）—— 模型有多大。它决定
+  `/status` 的显示，也决定默认压缩点。
+- **`autoCompactWindow`** —— 对话涨到多少开始压缩。它永远被硬上限截断，所以
+  填得比硬上限大等于没填。
+
+默认值：每个槽位的压缩点 = **有效窗口的 90%**（标了 1M 的槽是 1M，其余是分组的
+硬上限）。逐槽显式填了就按你填的来。
+
+两层故意用不同落点：
+
+- **全局** → `modelSettings.<id>.autoCompactWindow`，逐模型，写进已经存在的那个
+  条目，你的 `effortLevel` 不会丢。
+- **项目** → 一个顶层 `autoCompactWindow`。Claude Code 跨文件合并同名
+  `modelSettings` 条目时是整块替换还是按字段合并，文档没有保证，猜错就会把
+  `effortLevel` 冲掉。槽位之间值不一致时取最小值：早压缩不会溢出。
+
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` / `_TOKENS` 每次应用都会被清除 —— 它们压过所有
+逐模型设置，留着就等于让逐模型配置变成死配置。
+
+## 分组文件
+
+`~/.cc-switch-cli/groups/<name>.json`，权限 `0600`：
+
+```jsonc
+{
+  "schema": 1,
+  "base_url": "https://new-api.example.com",
+  "token": "sk-...",
+  "window": 500000,             // 组级硬上限，0 表示不写
+  "slots": {
+    "fable":    { "model": "packy-official/deepseek-flash", "name": "DeepSeek" },
+    "opus":     { "model": "packy-cc/claude-opus-5-5", "window": 1000000 },
+    "sonnet":   { "model": "packy-sale/deepseek-flash" },
+    "haiku":    { "model": "zen/glm-5.3-flash-free", "compact": 150000 },
+    "subagent": { "model": "zen/glm-5.3-flash-free" }
+  }
+}
 ```
 
-## `ccsc local` — 默认深度合并
+槽位的 `window` 只有两个取值：`0` 或 `1000000` —— `[1m]` 是 Claude Code 唯一认得
+的逐模型窗口控制。别的数值属于组级 `window`。四个家族槽位必填；`subagent` 可空，
+空的时候完全不写 `CLAUDE_CODE_SUBAGENT_MODEL`。
 
-`ccsc local <name>` 会深度合并进 `./.claude/settings.local.json`：提供商的
-`env` 键与顶层 `model` 覆盖同名项，**其余字段全部保留**（permissions、hooks、
-MCP、未知键等）。
+## `optional`
 
-- `--overwrite` — 整文件覆盖（丢弃项目专属键）。
-- `--path <dir>` / `--path <file>` — 写 / 查看 / 清除当前目录以外的位置。
-- `ccsc local show` — 汇总项目级模型覆盖，以及 project 作用域（`.mcp.json`）和 local 作用域（`~/.claude.json` → 当前项目）的 MCP 服务器。默认遮罩 token，加 `--reveal` 才显示原文。
-- `ccsc local clear` — 删除 `settings.local.json`，项目回退到全局提供商。`ccsc local clear --model` 只剥掉提供商的 `env` / 顶层 `model`，保留 permissions、hooks 和自定义 env。剥完若文件变空则一并删除。MCP 文件不会被改动。
+```
+ccsc optional
+```
 
-若提供商名字恰好叫 `clear` 或 `show`，用 `ccsc local -- <name>` 写入。
+一个面板，不开二级窗口：
 
-## `ccsc model test` — 可用性
+1. 填 `base_url` 和令牌。
+2. `ctrl+f` 调 `/v1/models`，把模型列表灌进模型行。
+3. 在模型行里打字就地过滤，`enter`（或 `→`）接受高亮那条并跳到下一行。任何 ID
+   都能手打 —— new-api 会转译协议，所以列表原样全给，不按
+   `supported_endpoint_types` 过滤。
 
-会对每个提供商里每个已配置的 model id 真实调用 Anthropic Messages（流式 + tool-call 探测），会有少量 token 消耗。
-结果缓存到 `~/.cc-switch-cli/test-status.json`；`ccsc model list` 显示该提供商最差的模型结论和模型数量。
+`subagent` 留空表示不配置；四个家族槽位留空会直接报错。
 
-| 状态 | 含义 |
+结果写进项目，一直有效，直到被 `ccsc local` 或 `ccsc local clear` 覆盖。
+
+## `status`、`mcp`、`skills`
+
+`ccsc status` 把用户、项目、本地三层里的每个模型键解析一遍，给出最终生效值和它
+来自哪一层，再补上启动槽位、子代理模型、压缩点、MCP/Skills 计数。令牌默认脱敏，
+`--reveal` 打着横幅显示完整值。
+
+`ccsc mcp` 读三个作用域，并把输的那条标出来：
+
+| 作用域 | 落盘位置 | 优先级 |
+|---|---|---|
+| user | `<CLAUDE_CONFIG_DIR 或 ~>/.claude.json` → `mcpServers` | 最低 |
+| local | 同一个文件 → `projects["<绝对 cwd>"].mcpServers` | 最高 |
+| project | `<cwd>/.mcp.json` → `mcpServers` | 中间 |
+
+`settings.json` 里没有服务定义 —— 只有审批键，看板读它来判断某个 `.mcp.json`
+服务是已批准还是待批准。
+
+`ccsc mcp test [name]` 启动服务、走一遍 `initialize` 和 `tools/list`，打印工具数
+和延迟。零写操作。
+
+`ccsc skills` 合并 `~/.claude/skills`、`.claude/skills` 以及两者的 `commands`
+目录，项目覆盖用户。
+
+## 键位
+
+列表：`↑↓` / `j` `k` / `←→` 移动，`enter` 选定，`q` 退出。分组列表另有 `n` 新建、
+`u` 应用全局、`d` 删除。
+
+面板（一份配置一个屏，不开二级窗口）：
+
+| 键 | 作用 |
 |---|---|
-| **OK** | 请求的检查全部通过 — 可完整使用。 |
-| **OK~** | 流式可用（聊天可用），但本轮 tool 探测未确认 `tool_use` — 提示而非故障。 |
-| **FAIL** | 流式失败（坏 token / 余额 / 未知模型 / 不可达）— 不可用。 |
+| `↑↓` `j` `k` `tab` `shift+tab` | 上下移动 |
+| `←` / `→` | 上一项 / 下一项 |
+| `enter` | 接受高亮建议，并跳到下一项 |
+| `ctrl+f` | 从接入点拉模型列表 |
+| `v` | 显示密钥原文 10 秒 |
+| `ctrl+u` | 清空当前行 |
+| `ctrl+s` | 保存（有非法行时拒绝） |
+| `esc` | 取消 |
 
-流式检查是权威来源：流式通过就不会判 FAIL，即使 tool 探测短暂失败。Tool 探测
-对齐 Claude Code 行为 — 发送 tools 列表但不带 `tool_choice`，因为强制
-`"any"` 会被不少能正常转发 tools 的网关拒绝。
+在模型行打字就地过滤建议；在密钥行打字会整体替换旧值。
 
-## 上下文窗口
+上下文窗口接受 `500k`、`567k`、`1m`、`2m` 或纯数字，回显也用同一套短写法。
 
-提供商上的 **context window** 是整组默认窗口。录入写成 `128k` / `256k` /
-`500k` / `1m` / `2m`，再打开编辑器也按这个写法回显。不允许纯数字（`500`、
-`500000`）。落盘时写成 Claude Code 要的整数
-（`CLAUDE_CODE_MAX_CONTEXT_TOKENS`）。窗口不超过 1M 且组内没有任何 id 带
-`[1m]` 时，同时写入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`。
+## 输出
 
-对未识别 / 网关 id，Claude Code 只把尾部 `[1m]` 当成 1M 窗口，并忽略该 id
-上的 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`。`[200k]` 这类后缀只在发请求时剥离，
-不改变假定窗口。常见写法：组填 `500k`，真正是 1M 的那个 id 再加 `[1m]`。
+ccsc 打出来的一切都是纯 ASCII 英文：没有对勾、箭头、框线或 emoji。任何终端、
+管道和日志里都一样可读。
 
-`ccsc local` 在新提供商未声明这三项时会删掉旧值。`ccsc model doctor` 打印
-解析后的 id、实际上线 id 和组窗口。
-## `ccsc mcp` — MCP 服务器
-
-管理 Claude Code 加载的 MCP 服务器：
-
-| 范围 | 存储位置 |
-|---|---|
-| **user** | `~/.claude.json` 顶层 `mcpServers` |
-| **local**（`add` 默认） | `~/.claude.json` → `projects.<cwd>.mcpServers` |
-| **project** | `<cwd>/.mcp.json` |
-
-`ccsc mcp test` 会真实执行 initialize 握手与 `tools/list`（stdio / Streamable HTTP，
-兼容旧版 SSE）。结果缓存到 `~/.cc-switch-cli/mcp-test-status.json`。WebSocket
-可配置但当前不探测。敏感值默认脱敏，`--reveal` 可查看原文。
-
-写入会直接修改 `~/.claude.json`（并在 `~/.cc-switch-cli/backups/` 留时间戳备份）。
-建议在 Claude Code 关闭时编辑 — 运行中的会话退出时可能回写该文件。
-
-## `ccsc export` / `ccsc import`
-
-在机器间迁移**全局**模型库与**用户级** MCP 服务器。导出文件为 AES-256-GCM
-加密信封（scrypt 派生密钥）；导入前会校验格式版本，不兼容时在索要密钥前失败。
-终端下可交互勾选，也可用 `--models` / `--mcps`（`all` / `none` / 逗号列表）。
-导入时已存在条目默认跳过，除非 `--force`。
-
-## TUI 快捷键
-
-管理器（裸 `ccsc model`）：
-
-| 键 | 动作 |
-|---|---|
-| `↑↓` `j` `k` | 导航 |
-| `/` | 搜索 / 过滤 |
-| `enter` `u` | 全局激活 |
-| `a` / `n` / `e` / `d` | 新增 / 重命名 / 编辑 / 删除 |
-| `v` `space` | 预览 JSON（遮罩） |
-| `t` / `T` | 测试当前 / 测试全部 |
-| `r` | 重载模型与状态 |
-| `q` `esc` | 退出 |
-
-MCP 管理器（裸 `ccsc mcp`）：
-
-| 键 | 动作 |
-|---|---|
-| `enter` `l` | 列出选中服务器的工具 |
-| `a` / `e` / `n` / `d` | 新增 / 编辑 / 重命名 / 删除 |
-| `v` `space` | 预览 JSON（脱敏） |
-| `t` / `T` | 探测当前 / 探测可见全部 |
-| `s` | 循环 scope 过滤（all/user/local/project） |
-| `r` | 重载 |
-| `q` `esc` | 退出 |
-
-编辑器（`ccsc model edit <name>` 或 MCP 的 `e`）：`tab`/`shift+tab` 切换字段，
-`ctrl+j` 切换原始 JSON，`ctrl+s` 保存，`esc` 取消。
-
-非 TTY 调用（`use`、`local`、`edit`、`model`）必须显式给出名称；在无终端
-环境下会拒绝打开 TUI，让脚本尽早失败。
-
-## 文件布局
+## 文件
 
 ```
 ~/.cc-switch-cli/
-├─ config.toml                  目标 settings.json 路径
-├─ models/*.json                提供商库
-├─ <provider>.current           当前激活标记
-├─ default*.json / backup-*.json  首次切换 + 手动备份
-├─ model-switch.logs            追加式切换审计日志
-└─ test-status.json             各提供商最近一次可用性结果
+├─ config.toml                 默认值：base_url、令牌、启动槽位、硬上限
+├─ groups/<name>.json          分组库（明文令牌，0600）
+├─ cache/models/*.json         模型列表，按 host + 令牌哈希缓存
+├─ state.json                  谁被应用到了哪、ccsc 拥有哪些模型条目
+├─ backups/<target>/*.json     每个被写文件最近十份快照
+└─ audit.jsonl                 追加式历史，5 MB × 3
 ```
 
-`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` 在 `model show` 与 TUI 预览中默认
-遮罩（除非 `--reveal`）；状态缓存从不保存 token 或请求体。
+删掉这个目录和二进制，就等于从没装过。
 
-## 构建矩阵
+设 `CCSC_HOME` 可以整体搬走。
 
-`build.bat` 交叉编译 6 个静态二进制到 `dist/`：
+## 令牌
 
-```
-cc-switch-cli_<version>_windows_amd64.exe
-cc-switch-cli_<version>_windows_arm64.exe
-cc-switch-cli_<version>_linux_amd64
-cc-switch-cli_<version>_linux_arm64
-cc-switch-cli_<version>_darwin_amd64
-cc-switch-cli_<version>_darwin_arm64
-```
+明文存放，权限 `0600`。这是**脱敏显示，不是加密存储**：处处显示
+`sk-tes******mnop`。面板里按 `v` 显示原文 10 秒；`ccsc status --reveal`
+会先打一条警告再打印一次。
 
-命名遵循常见 Go 发布约定：`name_version_os_arch`。
-`darwin` 即 macOS（Go 工具链对 Darwin 内核的称呼）。
+凭据只有一个概念。ccsc 写 `ANTHROPIC_AUTH_TOKEN`，网关按
+`Authorization: Bearer` 收。`ANTHROPIC_API_KEY`（`x-api-key` 头）不作为选项
+暴露；目标文件里如果已经有一条同值的，会被当成冗余删掉并在回执里说明。
 
 ## v1 → v2
 
+第一次运行 TUI 命令时自动迁移一次：
+
+```bash
+ccsc group     # 先迁移，再打开分组库
+```
+
+`~/.cc-switch-cli/models/*.json` 每个变成一个分组。原文件移到
+`~/.cc-switch-cli/backups/legacy-models-<日期>/`，`.migrated-v2` 标记保证幂等，
+已存在的同名分组绝不覆盖。
+
 | v1 | v2 |
 |---|---|
-| `cc-switch-cli list` | `ccsc model list` |
-| `cc-switch-cli cat <name>` | `ccsc model show <name>` |
-| `cc-switch-cli model set <name>` | `ccsc use <name>` |
-| `cc-switch-cli model current` | `ccsc current` |
-| `cc-switch-cli model backup` | `ccsc backup` |
-| `cc-switch-cli local <name> [path] --force` | `ccsc local <name> [--path <p>] [--overwrite]` |
+| `ccsc use <name>` | `ccsc group` → `u` |
+| `ccsc model *` | `ccsc group` |
+| `ccsc local [name]` | `ccsc local` → `enter` |
+| `ccsc local clear --model` | `ccsc local clear` |
+| `ccsc mcp add/remove/show/tools` | 取消 —— MCP 只读 |
+| `ccsc export` / `ccsc import` | 取消 |
+| `ccsc backup` / `ccsc current` / `ccsc init` | 取消，状态改为隐式 |
+| `ccsc model test` | 取消 —— 用 `ccsc status` 看最终生效配置 |
 
-`local` 现在默认写到 `.claude/settings.local.json` 并做合并（v1 写在目录根且
-整文件覆盖）。需要 v1 行为时加 `--overwrite`。
+## 不做
+
+- 不做代理、不做模型路由：一个会话一个接入点。
+- 不做 MCP / Skills 的任何写操作，只有只读看板加一个连通性探测。
+- 不做 `modelPicker`。
+- 不做 `--no-tui` 降级：没有终端就报错退出。
+- `group` 和 `local` **不自动拉取模型列表**。自动拉取只存在于 `optional`，
+  因为那里本来就是在跟 new-api 打交道。
+
+## 构建矩阵
+
+`build.bat` 交叉编译六个静态二进制到 `dist/`
+（`ccsc_<version>_<os>_<arch>`）。`.goreleaser.yml` 产出发布资产
+`ccsc_<os>_<arch>.zip` 加 `checksums.txt` —— 正是 `ccsc upgrade` 期望的名字。

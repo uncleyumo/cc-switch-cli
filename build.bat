@@ -8,9 +8,9 @@ if not defined COMMIT set "COMMIT=none"
 for /f %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd" 2^>nul') do set "BUILD_DATE=%%d"
 if not defined BUILD_DATE set "BUILD_DATE=unknown"
 
-if not defined VERSION set "VERSION=2.1.2"
+if not defined VERSION set "VERSION=2.2.0"
 
-set "LDFLAGS=-s -w -X cc-switch-cli/internal/version.Version=%VERSION% -X cc-switch-cli/internal/version.Commit=%COMMIT% -X cc-switch-cli/internal/version.Date=%BUILD_DATE%"
+set "LDFLAGS=-s -w -X github.com/uncleyumo/ccsc/internal/version.Version=%VERSION% -X github.com/uncleyumo/ccsc/internal/version.Commit=%COMMIT% -X github.com/uncleyumo/ccsc/internal/version.Date=%BUILD_DATE%"
 set "CGO_ENABLED=0"
 
 REM Remove legacy root-level binaries (dev leftovers, not for distribution)
@@ -51,8 +51,8 @@ exit /b 0
 set "GOOS=%~1"
 set "GOARCH=%~2"
 set "EXT=%~3"
-set "OUT=%~dp0dist\cc-switch-cli_%VERSION%_%GOOS%_%GOARCH%%EXT%"
-echo   %GOOS%/%GOARCH%  -^>  dist\cc-switch-cli_%VERSION%_%GOOS%_%GOARCH%%EXT%
+set "OUT=%~dp0dist\ccsc_%VERSION%_%GOOS%_%GOARCH%%EXT%"
+echo   %GOOS%/%GOARCH%  -^>  dist\ccsc_%VERSION%_%GOOS%_%GOARCH%%EXT%
 go build -ldflags="%LDFLAGS%" -o "%OUT%" "%~dp0."
 if errorlevel 1 (
     echo Build failed: %GOOS%/%GOARCH%
