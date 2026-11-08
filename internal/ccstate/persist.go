@@ -13,9 +13,11 @@ import (
 )
 
 // State records what ccsc last wrote where, so it can clean up only the keys
-// it owns and leave everything else alone.
+// it owns, tell the user which command produced the current configuration, and
+// reopen a panel on the values it left behind.
 type State struct {
 	Global       string                  `json:"global,omitempty"`
+	GlobalSource string                  `json:"global_source,omitempty"`
 	GlobalAt     string                  `json:"global_at,omitempty"`
 	GlobalModels []string                `json:"global_models,omitempty"`
 	Projects     map[string]ProjectState `json:"projects,omitempty"`
@@ -23,10 +25,30 @@ type State struct {
 
 // ProjectState is the per-project bookkeeping.
 type ProjectState struct {
-	Group      string   `json:"group,omitempty"`
+	Group string `json:"group,omitempty"`
+	// Source is the command that wrote this layer: "local" or "optional".
+	Source string `json:"source,omitempty"`
+	// Startup is the slot ANTHROPIC_DEFAULT_MODEL points at.
+	Startup    string   `json:"startup,omitempty"`
 	At         string   `json:"at,omitempty"`
 	Models     []string `json:"models,omitempty"`
 	TopCompact bool     `json:"top_compact,omitempty"`
+}
+
+// EffectiveSource returns the command that wrote this layer. State written by
+// older builds has no source field, so it is inferred from the recorded group
+// name: ccsc optional always stores "optional".
+func (p ProjectState) EffectiveSource() string {
+	if p.Source != "" {
+		return p.Source
+	}
+	switch {
+	case p.Group == "optional":
+		return "optional"
+	case p.Group != "":
+		return "local"
+	}
+	return ""
 }
 
 // LoadState reads state.json, returning an empty state when it is absent.

@@ -39,6 +39,10 @@ type Request struct {
 
 	// Action labels the audit entry, e.g. "group.apply".
 	Action string
+	// Source is the command that owns this write: "group", "local" or
+	// "optional". status reports it and optional uses it to decide whether to
+	// reopen on the values it left behind.
+	Source string
 }
 
 // Run applies the group and returns the receipt describing it.
@@ -264,6 +268,7 @@ func recordState(req Request, state *ccstate.State, plan render.Plan) error {
 	switch req.Layer {
 	case Global:
 		state.Global = req.Group.Name
+		state.GlobalSource = sourceOf(req)
 		state.GlobalAt = now
 		state.GlobalModels = models
 	case Project:
@@ -272,12 +277,27 @@ func recordState(req Request, state *ccstate.State, plan render.Plan) error {
 		}
 		state.Projects[req.Project.Key()] = ccstate.ProjectState{
 			Group:      req.Group.Name,
+			Source:     sourceOf(req),
+			Startup:    string(req.Options.StartupSlot),
 			At:         now,
 			Models:     models,
 			TopCompact: plan.TopCompact != nil,
 		}
 	}
 	return ccstate.SaveState(req.Paths.Root, state)
+}
+
+// sourceOf is the command name recorded in state.json.
+func sourceOf(req Request) string {
+	if req.Source != "" {
+		return req.Source
+	}
+	switch req.Layer {
+	case Project:
+		return "local"
+	default:
+		return "group"
+	}
 }
 
 func audit(req Request, targetPath, detail string) {

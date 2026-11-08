@@ -8,7 +8,10 @@ import (
 	"github.com/uncleyumo/ccsc/internal/status"
 )
 
-var statusReveal bool
+var (
+	statusReveal bool
+	statusDiff   bool
+)
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
@@ -25,8 +28,11 @@ var statusCmd = &cobra.Command{
 			fmt.Println("warning: the full token is shown below; mind screen sharing and terminal logs")
 			fmt.Println()
 		}
-		out := report.Render(statusReveal)
-		fmt.Print(out)
+		fmt.Print(report.Render(statusReveal))
+		if statusDiff {
+			fmt.Println()
+			fmt.Print(report.Diff(statusReveal))
+		}
 		return nil
 	},
 }
@@ -34,5 +40,6 @@ var statusCmd = &cobra.Command{
 func init() {
 	addProjectFlag(statusCmd)
 	statusCmd.Flags().BoolVar(&statusReveal, "reveal", false, "show the full token instead of masking it")
+	statusCmd.Flags().BoolVar(&statusDiff, "diff", false, "list every key the project or local layer changes")
 	rootCmd.AddCommand(statusCmd)
 }

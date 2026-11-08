@@ -194,13 +194,16 @@ empty, `CLAUDE_CODE_SUBAGENT_MODEL` is not written at all.
 ccsc optional
 ```
 
-One panel, no sub-screens:
+One panel, one picker:
 
 1. Fill in `base_url` and the token.
-2. `ctrl+f` calls `/v1/models` and loads the list into the model rows.
-3. Type to filter a row, `enter` (or `→`) accepts the highlighted id and moves
-   on. Any id can be typed by hand — new-api translates protocols, so the list
-   is shown in full and never filtered by `supported_endpoint_types`.
+2. Move to a slot and press `enter`. The first time, ccsc fetches
+   `/v1/models` and keeps the list for the rest of the session.
+3. In the picker, type to filter, `↑↓` to move, `enter` to select. `esc` goes
+   back to the panel with every other row untouched.
+
+The list is shown in full: new-api translates protocols, so it is never
+filtered by `supported_endpoint_types`.
 
 Leaving the `subagent` row empty means it is not configured. Leaving any of the
 four family rows empty is an error.
@@ -211,9 +214,10 @@ or `ccsc local clear` overrides it.
 ## `status`, `mcp`, `skills`
 
 `ccsc status` resolves every model key across the user, project and local
-layers, shows where the winning value came from, then the startup slot, the
-subagent model, the compaction point, and MCP/skills counts. Tokens are masked;
-`--reveal` prints one with a banner.
+layers, shows where the winning value came from, and names the command that
+wrote each layer (`group`, `local` or `optional`) — or says plainly that ccsc
+did not write it. Tokens are masked; `--diff` lists the keys the project or
+local layer changes; `--reveal` prints the full token with a warning first.
 
 `ccsc mcp` reads all three scopes and marks losers:
 
@@ -241,17 +245,18 @@ Panels (one screen per configuration, no nested windows):
 
 | Key | Action |
 |---|---|
-| `↑↓` `j` `k` `tab` `shift+tab` | move between rows |
+| `↑↓` `tab` `shift+tab` | move between rows |
 | `←` / `→` | previous / next row |
-| `enter` | accept the highlighted suggestion, then next row |
-| `ctrl+f` | fetch the model list from the endpoint |
-| `v` | reveal a secret row for 10 seconds |
+| `enter` | open the picker on a choice row, otherwise next row |
+| `ctrl+r` | reveal a secret row for 10 seconds |
 | `ctrl+u` | clear the current row |
 | `ctrl+s` | save (refused while a row is invalid) |
 | `esc` | cancel |
 
-Typing in a model row filters its suggestions in place. Typing in a secret row
-replaces the stored value.
+No plain letter is bound to a command inside a panel or a picker, so typed text
+is never swallowed by a shortcut. In a picker, `↑↓` move and `enter` selects.
+
+Typing in a secret row replaces the stored value.
 
 Context windows accept `500k`, `567k`, `1m`, `2m` or a bare number, and are
 shown back in the same short form.

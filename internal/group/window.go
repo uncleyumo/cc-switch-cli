@@ -17,7 +17,14 @@ import (
 //
 // A bare number is still accepted so old files and scripts keep working.
 func ParseWindow(s string) (int64, error) {
-	raw := strings.TrimSpace(s)
+	// Control characters can only come from a mangled paste or a terminal
+	// quirk; they are never part of a size.
+	raw := strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s))
 	if raw == "" {
 		return 0, nil
 	}

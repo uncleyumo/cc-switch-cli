@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/uncleyumo/ccsc/internal/ccstate"
 	"github.com/uncleyumo/ccsc/internal/group"
@@ -27,12 +28,21 @@ type Layer struct {
 }
 
 // Override records a key whose project or local value differs from the user
-// layer, so the screen can say exactly what is being overridden.
+// layer.
 type Override struct {
-	Key    string
+	Key   string
+	Layer string
+	Value string
+	User  string
+}
+
+// Provenance says which ccsc command wrote a layer, or that nothing ccsc
+// wrote is in effect.
+type Provenance struct {
 	Layer  string
-	Value  string
-	User   string
+	Source string
+	Name   string
+	At     string
 }
 
 // Report is everything the renderer needs.
@@ -49,6 +59,7 @@ type Report struct {
 	MCPServers map[string]int
 	Skills     map[string]int
 	Overrides  []Override
+	Provenance []Provenance
 	Warnings   []string
 }
 
@@ -109,6 +120,7 @@ func Gather(project ccstate.Project, hasProject bool) (*Report, error) {
 	r.StartupVal = r.Effective[render.DefaultModelKey(group.SlotName(r.Startup))]
 	r.Subagent = r.Effective[render.EnvSubagentModel]
 	r.Overrides = collectOverrides(r)
+	r.Provenance = collectProvenance(project, hasProject)
 
 	if hasProject {
 		if mcp, err := inventory.MCP(project); err == nil {
@@ -206,6 +218,42 @@ func collectOverrides(r *Report) []Override {
 	return out
 }
 
+// collectProvenance reports which ccsc command wrote each layer. A layer ccsc
+// never wrote is reported as such rather than guessed at.
+func collectProvenance(project ccstate.Project, hasProject bool) []Provenance {
+	paths, err := store.New()
+	if err != nil {
+		return nil
+	}
+	state, err := ccstate.LoadState(paths.Root)
+	if err != nil {
+		return nil
+	}
+	var out []Provenance
+
+	user := Provenance{Layer: "user"}
+	if state.GlobalSource != "" || state.Global != "" {
+		user.Source = state.GlobalSource
+		if user.Source == "" {
+			user.Source = "group"
+		}
+		user.Name = state.Global
+		user.At = state.GlobalAt
+	}
+	out = append(out, user)
+
+	if hasProject {
+		ps := Provenance{Layer: "project"}
+		if p, ok := state.Projects[project.Key()]; ok {
+			ps.Source = p.EffectiveSource()
+			ps.Name = p.Group
+			ps.At = p.At
+		}
+		out = append(out, ps)
+	}
+	return out
+}
+
 func (r *Report) layer(name string) (Layer, bool) {
 	for _, l := range r.Layers {
 		if l.Name == name {
@@ -232,6 +280,11 @@ func (r *Report) collectWarnings() []string {
 	return out
 }
 
+const (
+	labelW = 13
+	valueW = 52
+)
+
 // Render prints the report.
 func (r *Report) Render(reveal bool) string {
 	var b strings.Builder
@@ -239,90 +292,108 @@ func (r *Report) Render(reveal bool) string {
 	if r.HasProject {
 		fmt.Fprintf(&b, "project  %s\n", r.ProjectDir)
 	} else {
-		b.WriteString("project  none (home directory or a volume root)\n")
+		b.WriteString("project  none\n")
 	}
 
 	b.WriteString("\nlayers\n")
-	nameW := 8
+	stateW := 0
 	for _, l := range r.Layers {
-		if w := ui.Width(l.Name); w > nameW {
-			nameW = w
+		if w := ui.Width(layerState(l)); w > stateW {
+			stateW = w
 		}
 	}
 	for _, l := range r.Layers {
-		state := "not configured"
-		if l.Exists {
-			state = fmt.Sprintf("%s", plural(countModelKeys(l.Env), "model key"))
-		}
-		fmt.Fprintf(&b, "  %s%s %s\n", ui.Pad(l.Name, nameW),
-			ui.Pad(ui.Truncate(store.Shorten(l.Path), 56), 56), state)
+		fmt.Fprintf(&b, "  %s%s %s\n",
+			ui.Pad(l.Name, 8),
+			ui.Pad(layerState(l), stateW),
+			ui.Truncate(store.Shorten(l.Path), 78))
+	}
+	if len(r.Overrides) > 0 {
+		fmt.Fprintf(&b, "  %s\n", fmt.Sprintf("%d keys differ from the user layer; see ccsc status --diff", len(r.Overrides)))
 	}
 
-	b.WriteString("\nmodel\n")
-	row := func(label, value, source string) {
-		line := "  " + ui.Pad(label, 14) + value
-		if source != "" {
-			line = ui.Pad(line, 66) + dim(source)
+	b.WriteString("\nccsc\n")
+	for _, p := range r.Provenance {
+		if p.Source == "" {
+			fmt.Fprintf(&b, "  %s%s not written by ccsc\n", ui.Pad(p.Layer, 8), "")
+			continue
 		}
-		b.WriteString(line + "\n")
+		detail := p.Source
+		if p.Name != "" && p.Source != "optional" {
+			detail += " " + p.Name
+		}
+		fmt.Fprintf(&b, "  %s%s %s\n", ui.Pad(p.Layer, 8), ui.Pad(detail, 28), shortTime(p.At))
 	}
-	if v, ok := r.Effective[render.EnvBaseURL]; ok {
-		row("base url", v, r.Source[render.EnvBaseURL])
-	} else {
-		row("base url", "not set", "")
+
+	b.WriteString("\nin effect\n")
+	// Each block sizes its value column to its own content, so short values
+	// do not float two thirds of the way across the terminal.
+	writeRows := func(rows [][3]string) {
+		maxW := 0
+		for _, r := range rows {
+			if w := ui.Width(ui.Truncate(r[1], valueW)); w > maxW {
+				maxW = w
+			}
+		}
+		for _, r := range rows {
+			line := "  " + ui.Pad(r[0], labelW) + ui.Pad(ui.Truncate(r[1], valueW), maxW)
+			line = strings.TrimRight(line, " ")
+			if r[2] != "" {
+				line = ui.Pad(line, 2+labelW+maxW) + "  " + r[2]
+			}
+			b.WriteString(line + "\n")
+		}
 	}
-	if v, ok := r.Effective[render.EnvToken]; ok {
+
+	var meta [][3]string
+	baseURL, hasBaseURL := r.Effective[render.EnvBaseURL]
+	if !hasBaseURL {
+		baseURL = "not set"
+	}
+	meta = append(meta, [3]string{"base url", baseURL, r.Source[render.EnvBaseURL]})
+
+	if token, ok := r.Effective[render.EnvToken]; ok {
 		if !reveal {
-			v = group.MaskedToken(v)
+			token = group.MaskedToken(token)
 		}
-		row("token", v, r.Source[render.EnvToken])
+		meta = append(meta, [3]string{"token", token, r.Source[render.EnvToken]})
 	} else {
-		row("token", "not set", "")
+		meta = append(meta, [3]string{"token", "not set", ""})
 	}
+
 	if r.Startup != "" {
-		row("startup", r.Startup+" -> "+r.StartupVal, r.Source[render.EnvDefaultModel])
+		meta = append(meta, [3]string{"startup", r.Startup + " -> " + r.StartupVal, r.Source[render.EnvDefaultModel]})
 	} else {
-		row("startup", "not set", "")
+		meta = append(meta, [3]string{"startup", "not set", ""})
 	}
 	if r.Subagent != "" {
-		row("subagent", r.Subagent, r.Source[render.EnvSubagentModel])
+		meta = append(meta, [3]string{"subagent", r.Subagent, r.Source[render.EnvSubagentModel]})
 	} else {
-		row("subagent", "not set, follows the main model", "")
+		meta = append(meta, [3]string{"subagent", "not set, follows the main model", ""})
 	}
 	if v, ok := r.Effective[render.EnvMaxContextTokens]; ok {
-		row("context", v+" tokens", r.Source[render.EnvMaxContextTokens])
+		meta = append(meta, [3]string{"context", v + " tokens", r.Source[render.EnvMaxContextTokens]})
 	} else {
-		row("context", "gateway default", "")
+		meta = append(meta, [3]string{"context", "gateway default", ""})
 	}
 	if c := r.effectiveCompact(); c > 0 {
-		row("auto-compact", group.FormatWindow(c)+" tokens", "")
+		meta = append(meta, [3]string{"auto-compact", group.FormatWindow(c) + " tokens", ""})
 	} else {
-		row("auto-compact", "not set, Claude Code decides", "")
+		meta = append(meta, [3]string{"auto-compact", "not set, Claude Code decides", ""})
 	}
+	writeRows(meta)
 
-	b.WriteString("\nslots\n")
+	b.WriteString("\n")
+	var slots [][3]string
 	for _, name := range group.ModelSlots {
-		v, ok := r.Effective[render.DefaultModelKey(name)]
+		key := render.DefaultModelKey(name)
+		v, ok := r.Effective[key]
 		if !ok {
 			v = "not set"
 		}
-		fmt.Fprintf(&b, "  %s%s %s\n", ui.Pad(string(name), 10), ui.Pad(v, 44), dim(r.Source[render.DefaultModelKey(name)]))
+		slots = append(slots, [3]string{string(name), v, r.Source[key]})
 	}
-
-	if len(r.Overrides) > 0 {
-		b.WriteString("\noverrides\n")
-		for _, o := range r.Overrides {
-			userVal := o.User
-			if userVal == "" {
-				userVal = "not set"
-			}
-			if !reveal && (o.Key == render.EnvToken || o.Key == render.EnvAPIKey) {
-				userVal = group.MaskedToken(o.User)
-				o.Value = group.MaskedToken(o.Value)
-			}
-			fmt.Fprintf(&b, "  %s\n    %s: %s\n    user: %s\n", o.Key, o.Layer, o.Value, userVal)
-		}
-	}
+	writeRows(slots)
 
 	b.WriteString("\n")
 	mcpTotal, skillTotal := 0, 0
@@ -349,6 +420,41 @@ func (r *Report) Render(reveal bool) string {
 		}
 	}
 	return b.String()
+}
+
+// Diff lists the keys the project or local layer changes, one line each.
+func (r *Report) Diff(reveal bool) string {
+	if len(r.Overrides) == 0 {
+		return "no differences between the user, project and local layers\n"
+	}
+	keyW := 0
+	for _, o := range r.Overrides {
+		if w := ui.Width(o.Key); w > keyW {
+			keyW = w
+		}
+	}
+	var b strings.Builder
+	b.WriteString("layer differences\n\n")
+	for _, o := range r.Overrides {
+		userVal := o.User
+		if userVal == "" {
+			userVal = "not set"
+		}
+		val := o.Value
+		if !reveal && (o.Key == render.EnvToken || o.Key == render.EnvAPIKey) {
+			userVal = group.MaskedToken(userVal)
+			val = group.MaskedToken(val)
+		}
+		fmt.Fprintf(&b, "  %s  user: %s   %s: %s\n", ui.Pad(o.Key, keyW), userVal, o.Layer, val)
+	}
+	return b.String()
+}
+
+func layerState(l Layer) string {
+	if !l.Exists {
+		return "not configured"
+	}
+	return plural(countModelKeys(l.Env), "model key")
 }
 
 func (r *Report) effectiveCompact() int64 {
@@ -386,7 +492,14 @@ func countModelKeys(env map[string]string) int {
 	return n
 }
 
-func dim(s string) string { return s }
+// shortTime renders a stored RFC3339 stamp as 2026-11-08 15:56.
+func shortTime(at string) string {
+	t, err := time.Parse(time.RFC3339, at)
+	if err != nil {
+		return at
+	}
+	return t.Format("2006-01-02 15:04")
+}
 
 // plural renders "1 model key" and "8 model keys".
 func plural(n int, unit string) string {

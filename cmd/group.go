@@ -100,6 +100,7 @@ func runGroups(paths store.Paths, cfg *config.Config) error {
 				Layer:   apply.Global,
 				Options: render.Options{StartupSlot: cfg.StartupSlot()},
 				Action:  "group.apply",
+				Source:  "group",
 			})
 			if err != nil {
 				status = err.Error()

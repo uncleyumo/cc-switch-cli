@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -35,10 +37,16 @@ var localCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		header := []string{
+			project.Dir,
+			"target: " + project.LocalFile,
+			"",
+			currentConfigLine(paths, project),
+		}
 		res, err := workbench.RunList(workbench.ListOptions{
 			Title:  "project",
 			Items:  names,
-			Header: []string{project.Dir, "target: " + project.LocalFile, ""},
+			Header: header,
 			Bindings: []workbench.Binding{
 				{Key: "enter", Label: "apply", Action: workbench.ActApply},
 				{Key: "q", Label: "quit", Action: workbench.ActQuit},
@@ -63,6 +71,7 @@ var localCmd = &cobra.Command{
 			Project: project,
 			Options: render.Options{StartupSlot: cfg.StartupSlot()},
 			Action:  "local.apply",
+			Source:  "local",
 		})
 		if err != nil {
 			return err
@@ -92,6 +101,35 @@ var localClearCmd = &cobra.Command{
 		printReceipt(r)
 		return nil
 	},
+}
+
+// currentConfigLine says what already sits in the project layer, and which
+// command put it there.
+func currentConfigLine(paths store.Paths, project ccstate.Project) string {
+	state, err := ccstate.LoadState(paths.Root)
+	if err == nil {
+		if ps, ok := state.Projects[project.Key()]; ok && ps.EffectiveSource() != "" {
+			src := ps.EffectiveSource()
+			detail := ""
+			if src == "local" && ps.Group != "" {
+				detail = " (group " + ps.Group + ")"
+			}
+			return fmt.Sprintf("current: written by ccsc %s%s, applied %s", src, detail, shortTime(ps.At))
+		}
+	}
+	if _, err := os.Stat(project.LocalFile); err == nil {
+		return "current: a project config cc-switch did not write"
+	}
+	return "current: nothing configured here"
+}
+
+// shortTime renders a stored RFC3339 stamp as 2026-11-08 15:56.
+func shortTime(at string) string {
+	t, err := time.Parse(time.RFC3339, at)
+	if err != nil {
+		return at
+	}
+	return t.Format("2006-01-02 15:04")
 }
 
 // boundIndex puts the group this project is already using under the cursor.

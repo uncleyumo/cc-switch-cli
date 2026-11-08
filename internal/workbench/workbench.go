@@ -1,9 +1,9 @@
 // Package workbench holds the two screens ccsc uses: a list and a panel.
 //
-// A panel is one screen for a whole configuration. Rows are edited in place,
-// model ids are typed with inline suggestions instead of opening a picker, and
-// secrets stay masked until asked for. Commands sequence these screens; no
-// screen opens another.
+// A panel is one screen for a whole configuration. Text is typed in place;
+// rows that pick from a list hand off to a picker and come back. No plain
+// letter is ever bound to a command inside a panel or a filterable list, so
+// typing can never be swallowed by a shortcut.
 package workbench
 
 import (
@@ -56,6 +56,9 @@ type ListOptions struct {
 	Empty    string
 	// Cursor is the initially selected row.
 	Cursor int
+	// Filter turns the screen into a picker: typed characters filter the
+	// items and no letter key is bound to anything.
+	Filter bool
 }
 
 // ListResult is the choice the user made.
@@ -65,21 +68,23 @@ type ListResult struct {
 }
 
 type listModel struct {
-	opt    ListOptions
-	cursor int
-	result ListResult
+	opt     ListOptions
+	cursor  int
+	query   string
+	cancel  bool
+	result  ListResult
 }
 
 // RunList shows a list and returns the chosen action.
 func RunList(opt ListOptions) (ListResult, error) {
-	if len(opt.Bindings) == 0 {
+	if !opt.Filter && len(opt.Bindings) == 0 {
 		opt.Bindings = []Binding{
 			{Key: "enter", Label: "select", Action: ActEnter},
 			{Key: "q", Label: "quit", Action: ActQuit},
 		}
 	}
 	m := &listModel{opt: opt, cursor: opt.Cursor}
-	if m.cursor >= len(opt.Items) {
+	if m.cursor >= len(opt.Items) || m.cursor < 0 {
 		m.cursor = 0
 	}
 	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
@@ -89,13 +94,87 @@ func RunList(opt ListOptions) (ListResult, error) {
 	return final.(*listModel).result, nil
 }
 
+// RunPicker is the filterable list used to choose a model or a slot name.
+func RunPicker(title string, items []string, current string) (string, bool, error) {
+	cursor := 0
+	for i, item := range items {
+		if item == current {
+			cursor = i
+			break
+		}
+	}
+	res, err := RunList(ListOptions{Title: title, Items: items, Filter: true, Cursor: cursor})
+	if err != nil {
+		return "", false, err
+	}
+	if res.Item == "" {
+		return "", false, nil
+	}
+	return res.Item, true, nil
+}
+
 func (m *listModel) Init() tea.Cmd { return nil }
+
+// visible returns the items matching the current query.
+func (m *listModel) visible() []string {
+	if m.query == "" {
+		return m.opt.Items
+	}
+	needle := strings.ToLower(m.query)
+	var out []string
+	for _, item := range m.opt.Items {
+		if strings.Contains(strings.ToLower(item), needle) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
 
 func (m *listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
 	}
+
+	if m.opt.Filter {
+		switch key.String() {
+		case "ctrl+c", "esc":
+			return m, tea.Quit
+		case "enter":
+			if items := m.visible(); len(items) > 0 {
+				m.result = ListResult{Action: ActEnter, Item: items[m.cursor]}
+			}
+			return m, tea.Quit
+		case "up":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+			return m, nil
+		case "down":
+			if m.cursor < len(m.visible())-1 {
+				m.cursor++
+			}
+			return m, nil
+		case "backspace":
+			if r := []rune(m.query); len(r) > 0 {
+				m.query = string(r[:len(r)-1])
+				m.cursor = 0
+			}
+			return m, nil
+		case "ctrl+u":
+			m.query = ""
+			m.cursor = 0
+			return m, nil
+		}
+		if key.Type == tea.KeyRunes {
+			if text := printable(key.Runes); text != "" {
+				m.query += text
+				m.cursor = 0
+			}
+		}
+		return m, nil
+	}
+
 	switch key.String() {
 	case "ctrl+c", "q", "esc":
 		m.result = ListResult{Action: ActQuit}
@@ -143,14 +222,23 @@ func (m *listModel) View() string {
 	}
 	b.WriteString("\n")
 
-	if len(m.opt.Items) == 0 {
+	items := m.visible()
+	if m.opt.Filter {
+		line := "  filter: " + m.query
+		if m.query == "" {
+			line = "  filter: " + hintStyle.Render("type to narrow the list")
+		}
+		b.WriteString(line + "\n\n")
+	}
+
+	if len(items) == 0 {
 		empty := m.opt.Empty
 		if empty == "" {
-			empty = "(empty)"
+			empty = "(nothing matches)"
 		}
 		b.WriteString("  " + dimStyle.Render(empty) + "\n")
 	}
-	for i, item := range m.opt.Items {
+	for i, item := range items {
 		if i == m.cursor {
 			b.WriteString(selStyle.Render("> "+item) + "\n")
 		} else {
@@ -162,6 +250,10 @@ func (m *listModel) View() string {
 		b.WriteString("\n" + okStyle.Render(m.opt.Status) + "\n")
 	}
 
+	if m.opt.Filter {
+		b.WriteString("\n" + hintStyle.Render("type to filter   up/down move   enter select   esc cancel"))
+		return b.String()
+	}
 	var keys []string
 	for _, bind := range m.opt.Bindings {
 		keys = append(keys, bind.Key+" "+bind.Label)
@@ -176,10 +268,10 @@ type RowKind int
 const (
 	// RowText is a plain editable string.
 	RowText RowKind = iota
-	// RowSecret is masked until revealed with "v"; typing replaces it.
+	// RowSecret is masked until revealed; typing replaces it.
 	RowSecret
-	// RowSuggest is a string with an inline list of suggestions.
-	RowSuggest
+	// RowPick shows a value chosen elsewhere; enter opens a picker.
+	RowPick
 	// RowReadOnly cannot be edited.
 	RowReadOnly
 )
@@ -190,7 +282,6 @@ type Row struct {
 	Label   string
 	Kind    RowKind
 	Value   string
-	Suggest []string
 	Hint    string
 	// Empty is the placeholder shown when Value is empty.
 	Empty string
@@ -201,24 +292,28 @@ type PanelOptions struct {
 	Title  string
 	Header []string
 	Rows   []Row
+	// Focus is the row to start on. Zero is the first row; a read-only row
+	// falls back to the first editable one. Callers set it when reopening a
+	// panel after a picker so the cursor stays where the user left it.
+	Focus int
 	// Footer replaces the default key hints.
-	Footer string
-	// Validate runs on every edit. A non-nil error is shown and blocks saving.
+	Footer   string
+	Status   string
+	Error    string
 	Validate func(values []string) error
-	// Fetch is bound to ctrl+f. It returns suggestions that are merged into
-	// every RowSuggest row, plus a one-line status to show above the footer.
-	Fetch func(values []string) ([]string, string, error)
 }
 
-// PanelResult is the submitted values, in row order.
+// PanelResult is the submitted values, or a request to open a picker.
 type PanelResult struct {
 	Saved  bool
 	Values []string
+	// PickRow is the index of the row whose picker the caller should open,
+	// or -1 when the panel finished normally.
+	PickRow int
 }
 
 const (
 	secretHold   = 10 * time.Second
-	maxSuggest   = 6
 	secretGlyphs = "********"
 )
 
@@ -233,23 +328,45 @@ type panelModel struct {
 	revealed    bool
 	replacing   bool
 	validateErr string
-	dynamic     []string
-	status      string
+	done        bool
 	result      PanelResult
 }
 
-// RunPanel shows a panel and returns the submitted values.
+// RunPanel shows a panel and returns the submitted values or a picker request.
+//
+// The caller keeps the values between runs: when the panel hands off to a
+// picker it returns PickRow, and the next run is seeded with the values the
+// user had already typed.
 func RunPanel(opt PanelOptions) (PanelResult, error) {
-	m := &panelModel{opt: opt, height: 24}
+	m := &panelModel{opt: opt, height: 24, result: PanelResult{PickRow: -1}}
 	m.values = make([]string, len(opt.Rows))
 	for i, r := range opt.Rows {
 		m.values[i] = r.Value
 	}
+	m.focus = initialFocus(opt.Rows, opt.Focus)
 	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	if err != nil {
 		return PanelResult{}, err
 	}
-	return final.(*panelModel).result, nil
+	res := final.(*panelModel).result
+	if res.PickRow < 0 {
+		res.Values = append([]string(nil), final.(*panelModel).values...)
+	}
+	return res, nil
+}
+
+// initialFocus honours the caller's request when that row can be edited, and
+// otherwise falls back to the first editable row.
+func initialFocus(rows []Row, want int) int {
+	if want >= 0 && want < len(rows) && rows[want].Kind != RowReadOnly {
+		return want
+	}
+	for i, r := range rows {
+		if r.Kind != RowReadOnly {
+			return i
+		}
+	}
+	return 0
 }
 
 func (m *panelModel) Init() tea.Cmd { return nil }
@@ -271,53 +388,49 @@ func (m *panelModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *panelModel) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	row := m.opt.Rows[m.focus]
 
+	// Only control keys and arrows are ever commands here. Every printable
+	// character belongs to the field being edited.
 	switch key.String() {
 	case "ctrl+c", "esc":
 		return m, tea.Quit
 	case "ctrl+s":
-		m.validate()
-		if m.validateErr != "" {
-			return m, nil
+		m.collect()
+		if m.opt.Validate != nil {
+			if err := m.opt.Validate(m.values); err != nil {
+				m.validateErr = err.Error()
+				return m, nil
+			}
 		}
-		m.result = PanelResult{Saved: true, Values: append([]string(nil), m.values...)}
+		m.result = PanelResult{Saved: true, Values: append([]string(nil), m.values...), PickRow: -1}
 		return m, tea.Quit
-	case "up", "k", "shift+tab", "left":
+	case "up", "shift+tab", "left":
 		m.move(-1)
 		return m, nil
-	case "down", "j", "tab", "right", "enter":
-		if row.Kind == RowSuggest && key.String() != "tab" {
-			if match := m.bestMatch(m.values[m.focus]); match != "" {
-				m.values[m.focus] = match
-			}
+	case "down", "tab", "right":
+		m.move(1)
+		return m, nil
+	case "enter":
+		if row.Kind == RowPick {
+			m.collect()
+			m.result = PanelResult{PickRow: m.focus, Values: append([]string(nil), m.values...)}
+			return m, tea.Quit
 		}
 		m.move(1)
 		return m, nil
 	case "backspace":
-		if row.Kind == RowReadOnly {
+		if row.Kind == RowReadOnly || row.Kind == RowPick {
 			return m, nil
 		}
 		m.typeInto(row, "", true)
 		return m, nil
 	case "ctrl+u":
-		if row.Kind != RowReadOnly {
+		if row.Kind == RowText || row.Kind == RowSecret {
 			m.values[m.focus] = ""
 			m.replacing = false
+			m.validateErr = ""
 		}
 		return m, nil
-	case "ctrl+f":
-		if m.opt.Fetch == nil {
-			return m, nil
-		}
-		suggest, status, err := m.opt.Fetch(m.values)
-		if err != nil {
-			m.status = ""
-			m.validateErr = err.Error()
-			return m, nil
-		}
-		m.dynamic = suggest
-		m.status = status
-		return m, nil
-	case "v":
+	case "ctrl+r":
 		if row.Kind == RowSecret {
 			m.revealed = !m.revealed
 			if m.revealed {
@@ -327,13 +440,30 @@ func (m *panelModel) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if row.Kind == RowReadOnly {
+	if row.Kind == RowReadOnly || row.Kind == RowPick {
 		return m, nil
 	}
-	if key.Type == tea.KeyRunes && len(key.Runes) > 0 {
-		m.typeInto(row, string(key.Runes), false)
+	if key.Type == tea.KeyRunes {
+		// Control characters never belong in a value. Windows terminals
+		// deliver Ctrl+Space (the IME toggle) as a NUL rune, which used to be
+		// appended silently and then failed validation with an invisible byte.
+		if text := printable(key.Runes); text != "" {
+			m.typeInto(row, text, false)
+		}
 	}
 	return m, nil
+}
+
+// printable drops control characters from typed input.
+func printable(rs []rune) string {
+	var b strings.Builder
+	for _, r := range rs {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // typeInto appends text, or removes the last rune when backspace is set. A
@@ -358,7 +488,7 @@ func (m *panelModel) typeInto(row Row, text string, backspace bool) {
 		cur += text
 	}
 	m.values[m.focus] = cur
-	m.validate()
+	m.validateErr = ""
 }
 
 func (m *panelModel) move(delta int) {
@@ -373,54 +503,8 @@ func (m *panelModel) move(delta int) {
 	m.replacing = false
 }
 
-func (m *panelModel) validate() {
-	if m.opt.Validate == nil {
-		m.validateErr = ""
-		return
-	}
-	if err := m.opt.Validate(m.values); err != nil {
-		m.validateErr = err.Error()
-		return
-	}
-	m.validateErr = ""
-}
-
-// matches returns the suggestions that contain what has been typed so far.
-func (m *panelModel) matches(idx int) []string {
-	row := m.opt.Rows[idx]
-	if row.Kind != RowSuggest {
-		return nil
-	}
-	pool := row.Suggest
-	if len(m.dynamic) > 0 {
-		pool = m.dynamic
-	}
-	if len(pool) == 0 {
-		return nil
-	}
-	needle := strings.ToLower(strings.TrimSpace(m.values[idx]))
-	var out []string
-	for _, s := range pool {
-		if needle != "" && !strings.Contains(strings.ToLower(s), needle) {
-			continue
-		}
-		out = append(out, s)
-		if len(out) >= maxSuggest {
-			break
-		}
-	}
-	return out
-}
-
-func (m *panelModel) bestMatch(value string) string {
-	ms := m.matches(m.focus)
-	if len(ms) == 0 {
-		return ""
-	}
-	if strings.TrimSpace(value) == "" {
-		return ""
-	}
-	return ms[0]
+func (m *panelModel) collect() {
+	// Values are kept in sync as they are typed; nothing to gather.
 }
 
 func (m *panelModel) windowSize() int {
@@ -434,18 +518,6 @@ func (m *panelModel) windowSize() int {
 	return n
 }
 
-// visibleRows counts a row plus the suggestion lines it adds.
-func (m *panelModel) rowHeight(i int) int {
-	h := 1
-	if m.opt.Rows[i].Section != "" {
-		h++
-	}
-	if i == m.focus {
-		h += len(m.matches(i))
-	}
-	return h
-}
-
 func (m *panelModel) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(m.opt.Title) + "\n")
@@ -454,7 +526,6 @@ func (m *panelModel) View() string {
 	}
 	b.WriteString("\n")
 
-	// Keep the focused row inside the window.
 	if m.focus < m.offset {
 		m.offset = m.focus
 	}
@@ -500,14 +571,16 @@ func (m *panelModel) View() string {
 				b.WriteString(secretGlyphs)
 			}
 			if i == m.focus {
-				b.WriteString(hintStyle.Render("  v to reveal"))
+				b.WriteString(hintStyle.Render("  ctrl+r to reveal"))
 			}
-		case RowSuggest:
-			v := m.values[i]
-			if v == "" {
+		case RowPick:
+			if m.values[i] == "" {
 				b.WriteString(dimStyle.Render(row.Empty))
 			} else {
-				b.WriteString(v)
+				b.WriteString(m.values[i])
+			}
+			if i == m.focus {
+				b.WriteString(hintStyle.Render("  enter to choose"))
 			}
 		default:
 			v := m.values[i]
@@ -518,30 +591,19 @@ func (m *panelModel) View() string {
 			} else {
 				b.WriteString(v)
 			}
-		}
-		if row.Hint != "" && i == m.focus {
-			b.WriteString(hintStyle.Render("  " + row.Hint))
+			if row.Hint != "" && i == m.focus {
+				b.WriteString(hintStyle.Render("  " + row.Hint))
+			}
 		}
 		b.WriteString("\n")
 		lines++
-
-		if i == m.focus {
-			for _, s := range m.matches(i) {
-				if lines >= m.windowSize() {
-					break
-				}
-				style := hintStyle
-				if s == m.values[i] {
-					style = okStyle
-				}
-				b.WriteString("  " + strings.Repeat(" ", labelW) + style.Render(s) + "\n")
-				lines++
-			}
-		}
 	}
 
-	if m.status != "" {
-		b.WriteString("\n" + okStyle.Render(m.status) + "\n")
+	if m.opt.Status != "" {
+		b.WriteString("\n" + okStyle.Render(m.opt.Status) + "\n")
+	}
+	if m.opt.Error != "" {
+		b.WriteString("\n" + errStyle.Render("error: "+m.opt.Error) + "\n")
 	}
 	if m.validateErr != "" {
 		b.WriteString("\n" + errStyle.Render("error: "+m.validateErr) + "\n")
@@ -549,10 +611,7 @@ func (m *panelModel) View() string {
 
 	footer := m.opt.Footer
 	if footer == "" {
-		footer = "up/down move   left/right previous/next   enter accept & next   ctrl+s save   esc cancel"
-		if m.opt.Fetch != nil {
-			footer = "ctrl+f fetch models   " + footer
-		}
+		footer = "up/down move   enter choose or next   ctrl+s save   esc cancel"
 	}
 	b.WriteString("\n" + hintStyle.Render(footer))
 	return b.String()
@@ -562,13 +621,16 @@ func (m *panelModel) View() string {
 func (m *panelModel) usedLines(from, to int) int {
 	n := 0
 	for i := from; i < to; i++ {
-		n += m.rowHeight(i)
+		n++
+		if m.opt.Rows[i].Section != "" {
+			n++
+		}
 	}
 	return n
 }
 
 // Confirm asks a yes/no question on its own screen.
-func Confirm(title string, yes string, no string) (bool, error) {
+func Confirm(title, no, yes string) (bool, error) {
 	res, err := RunList(ListOptions{
 		Title: title,
 		Items: []string{no, yes},

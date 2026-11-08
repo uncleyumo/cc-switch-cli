@@ -15,14 +15,22 @@ func keyMsg(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyLeft}
 	case "right":
 		return tea.KeyMsg{Type: tea.KeyRight}
+	case "up":
+		return tea.KeyMsg{Type: tea.KeyUp}
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}
+	case "backspace":
+		return tea.KeyMsg{Type: tea.KeyBackspace}
 	case "ctrl+s":
 		return tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "ctrl+r":
+		return tea.KeyMsg{Type: tea.KeyCtrlR}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
 
 func newPanel(rows []Row) *panelModel {
-	m := &panelModel{opt: PanelOptions{Title: "panel", Rows: rows}, height: 40}
+	m := &panelModel{opt: PanelOptions{Title: "panel", Rows: rows}, height: 40, result: PanelResult{PickRow: -1}}
 	m.values = make([]string, len(rows))
 	for i, r := range rows {
 		m.values[i] = r.Value
@@ -31,9 +39,7 @@ func newPanel(rows []Row) *panelModel {
 }
 
 func TestPanelMasksSecrets(t *testing.T) {
-	m := newPanel([]Row{
-		{Section: "endpoint", Label: "token", Kind: RowSecret, Value: "sk-abcdef123456"},
-	})
+	m := newPanel([]Row{{Section: "endpoint", Label: "token", Kind: RowSecret, Value: "sk-abcdef123456"}})
 	view := m.View()
 	if strings.Contains(view, "sk-abcdef123456") {
 		t.Fatalf("the secret leaked into the frame:\n%s", view)
@@ -60,35 +66,33 @@ func TestPanelTypingReplacesASecret(t *testing.T) {
 	}
 }
 
-func TestPanelShowsFilteredSuggestions(t *testing.T) {
+// TestPanelLettersAreTypedNotBound is the regression test for the bug that
+// made model ids impossible to type: j and k used to move the cursor instead
+// of inserting characters.
+func TestPanelLettersAreTypedNotBound(t *testing.T) {
 	m := newPanel([]Row{
-		{Label: "fable", Kind: RowSuggest, Value: "glm", Suggest: []string{
-			"packy-officially/deepseek-flash",
-			"opencode2api-zen/glm-5.3-flash-free",
-			"packy-glm-sale/glm-5.3",
-		}},
+		{Label: "base url", Kind: RowText},
+		{Label: "other", Kind: RowText},
 	})
-	view := m.View()
-	if strings.Contains(view, "deepseek-flash") {
-		t.Errorf("a non-matching suggestion was shown:\n%s", view)
+	for _, ch := range []string{"p", "a", "c", "k", "y", "-", "j", "k", "v", "q"} {
+		m.handleKey(keyMsg(ch))
 	}
-	if !strings.Contains(view, "glm-5.3") {
-		t.Errorf("matching suggestions missing:\n%s", view)
+	if got, want := m.values[0], "packy-jkvq"; got != want {
+		t.Fatalf("typed value = %q, want %q", got, want)
+	}
+	if m.focus != 0 {
+		t.Fatalf("focus moved while typing: %d", m.focus)
 	}
 }
 
-func TestPanelEnterAcceptsTheTopSuggestion(t *testing.T) {
-	rows := []Row{
-		{Label: "fable", Kind: RowSuggest, Value: "glm", Suggest: []string{"a/glm-5.3", "b/glm-4"}},
-		{Label: "opus", Kind: RowText, Empty: "not set"},
-	}
-	m := newPanel(rows)
+func TestPanelEnterOnAPickRowRequestsThePicker(t *testing.T) {
+	m := newPanel([]Row{
+		{Label: "fable", Kind: RowPick, Empty: "not set"},
+		{Label: "opus", Kind: RowText},
+	})
 	m.handleKey(keyMsg("enter"))
-	if got := m.values[0]; got != "a/glm-5.3" {
-		t.Fatalf("enter did not accept the top match, got %q", got)
-	}
-	if m.focus != 1 {
-		t.Fatalf("enter should also advance, focus=%d", m.focus)
+	if m.result.PickRow != 0 {
+		t.Fatalf("PickRow = %d, want 0", m.result.PickRow)
 	}
 }
 
@@ -118,6 +122,68 @@ func TestPanelValidationBlocksSaving(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "name is required") {
 		t.Errorf("the error should be visible:\n%s", m.View())
+	}
+}
+
+func TestPickerFiltersAsYouType(t *testing.T) {
+	m := &listModel{opt: ListOptions{
+		Title:  "fable model",
+		Items:  []string{"packy-officially/deepseek-flash", "opencode2api-zen/glm-5.3-flash-free", "origin-mimo/mimo-v2.6-flash"},
+		Filter: true,
+	}}
+	for _, ch := range []string{"j", "k"} {
+		m.Update(keyMsg(ch))
+	}
+	if m.query != "jk" {
+		t.Fatalf("query = %q, want typing to be captured verbatim", m.query)
+	}
+	if got := m.visible(); len(got) != 0 {
+		t.Fatalf("no item contains jk, got %v", got)
+	}
+
+	m.query = ""
+	for _, ch := range []string{"g", "l", "m"} {
+		m.Update(keyMsg(ch))
+	}
+	items := m.visible()
+	if len(items) != 1 || !strings.Contains(items[0], "glm") {
+		t.Fatalf("glm should match one model, got %v", items)
+	}
+
+	m.Update(keyMsg("enter"))
+	if !strings.Contains(m.result.Item, "glm") {
+		t.Fatalf("enter should select the highlighted match, got %q", m.result.Item)
+	}
+}
+
+func TestInitialFocusStaysWhereTheUserWas(t *testing.T) {
+	rows := []Row{
+		{Label: "base url", Kind: RowText},
+		{Label: "fable", Kind: RowPick},
+		{Label: "opus", Kind: RowPick},
+	}
+	if got := initialFocus(rows, 2); got != 2 {
+		t.Fatalf("focus = %d, want 2 (the row the picker was opened from)", got)
+	}
+	if got := initialFocus(rows, 0); got != 0 {
+		t.Fatalf("focus = %d, want 0", got)
+	}
+	rows[2].Kind = RowReadOnly
+	if got := initialFocus(rows, 2); got != 0 {
+		t.Fatalf("a read-only request must fall back to the first editable row, got %d", got)
+	}
+}
+
+func TestPanelIgnoresControlCharacters(t *testing.T) {
+	m := newPanel([]Row{{Label: "auto-compact", Kind: RowText, Value: "450k"}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0x00}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0x1b}})
+	if got := m.values[0]; got != "450k" {
+		t.Fatalf("a control character was appended: %q", got)
+	}
+	m.handleKey(keyMsg("0"))
+	if got := m.values[0]; got != "450k0" {
+		t.Fatalf("a normal character should still append: %q", got)
 	}
 }
 
